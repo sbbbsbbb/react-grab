@@ -6,13 +6,15 @@ import {
   FROZEN_GLOW_EDGE_PX,
   Z_INDEX_OVERLAY_CANVAS,
 } from "../constants.js";
-import { buildOpenFileUrl } from "../utils/build-open-file-url.js";
+import { openFile } from "../utils/open-file.js";
 import { isElementConnected } from "../utils/is-element-connected.js";
 import { OverlayCanvas } from "./overlay-canvas.js";
 import { SelectionLabel } from "./selection-label/index.js";
 import { Toolbar } from "./toolbar/index.js";
+import { ToolbarMenu } from "./toolbar/toolbar-menu.js";
 import { ContextMenu } from "./context-menu.js";
 import { HistoryDropdown } from "./history-dropdown.js";
+import { ClearHistoryPrompt } from "./clear-history-prompt.js";
 
 export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
   return (
@@ -143,11 +145,7 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
           onCancelDismiss={props.onCancelDismiss}
           onOpen={() => {
             if (props.selectionFilePath) {
-              const openFileUrl = buildOpenFileUrl(
-                props.selectionFilePath,
-                props.selectionLineNumber,
-              );
-              window.open(openFileUrl, "_blank");
+              openFile(props.selectionFilePath, props.selectionLineNumber);
             }
           }}
           isContextMenuOpen={props.contextMenuPosition !== null}
@@ -175,10 +173,14 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
               const hasCompletedStatus =
                 currentInstance.status === "copied" ||
                 currentInstance.status === "fading";
-              if (!hasCompletedStatus || !isElementConnected(currentInstance.element)) {
+              if (
+                !hasCompletedStatus ||
+                !isElementConnected(currentInstance.element)
+              ) {
                 return undefined;
               }
-              return () => props.onShowContextMenuInstance?.(currentInstance.id);
+              return () =>
+                props.onShowContextMenuInstance?.(currentInstance.id);
             })()}
             onHoverChange={(isHovered) =>
               props.onLabelInstanceHoverChange?.(instance().id, isHovered)
@@ -190,10 +192,8 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
       <Show when={props.toolbarVisible !== false}>
         <Toolbar
           isActive={props.isActive}
-          isCommentMode={props.isCommentMode}
           isContextMenuOpen={props.contextMenuPosition !== null}
           onToggle={props.onToggleActive}
-          onComment={props.onComment}
           enabled={props.enabled}
           onToggleEnabled={props.onToggleEnabled}
           shakeCount={props.shakeCount}
@@ -202,11 +202,18 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
           onSelectHoverChange={props.onToolbarSelectHoverChange}
           onContainerRef={props.onToolbarRef}
           historyItemCount={props.historyItemCount}
+          clockFlashTrigger={props.clockFlashTrigger}
           hasUnreadHistoryItems={props.hasUnreadHistoryItems}
           onToggleHistory={props.onToggleHistory}
+          onCopyAll={props.onCopyAll}
+          onCopyAllHover={props.onCopyAllHover}
           onHistoryButtonHover={props.onHistoryButtonHover}
           isHistoryDropdownOpen={Boolean(props.historyDropdownPosition)}
           isHistoryPinned={props.isHistoryPinned}
+          toolbarActions={props.toolbarActions}
+          onToggleMenu={props.onToggleMenu}
+          isMenuOpen={Boolean(props.toolbarMenuPosition)}
+          isClearPromptOpen={Boolean(props.clearPromptPosition)}
         />
       </Show>
 
@@ -220,6 +227,18 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
         actionContext={props.actionContext}
         onDismiss={props.onContextMenuDismiss ?? (() => {})}
         onHide={props.onContextMenuHide ?? (() => {})}
+      />
+
+      <ToolbarMenu
+        position={props.toolbarMenuPosition ?? null}
+        actions={props.toolbarActions ?? []}
+        onDismiss={props.onToolbarMenuDismiss ?? (() => {})}
+      />
+
+      <ClearHistoryPrompt
+        position={props.clearPromptPosition ?? null}
+        onConfirm={props.onClearHistoryConfirm ?? (() => {})}
+        onCancel={props.onClearHistoryCancel ?? (() => {})}
       />
 
       <HistoryDropdown

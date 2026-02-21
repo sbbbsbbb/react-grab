@@ -1,8 +1,4 @@
 import { clearElementPositionCache } from "./get-element-at-position.js";
-import {
-  enablePointerEventsOverride,
-  disablePointerEventsOverride,
-} from "./pointer-events-override.js";
 import { createStyleElement } from "./create-style-element.js";
 
 const POINTER_EVENTS_STYLES = "* { pointer-events: none !important; }";
@@ -162,6 +158,14 @@ const restoreFrozenStates = (
   storageMap.clear();
 };
 
+export const suspendPointerEventsFreeze = (): void => {
+  if (pointerEventsStyle) pointerEventsStyle.disabled = true;
+};
+
+export const resumePointerEventsFreeze = (): void => {
+  if (pointerEventsStyle) pointerEventsStyle.disabled = false;
+};
+
 export const freezePseudoStates = (): void => {
   if (pointerEventsStyle) return;
 
@@ -183,11 +187,9 @@ export const freezePseudoStates = (): void => {
     "data-react-grab-frozen-pseudo",
     POINTER_EVENTS_STYLES,
   );
-  enablePointerEventsOverride();
 };
 
 export const unfreezePseudoStates = (): void => {
-  disablePointerEventsOverride();
   clearElementPositionCache();
 
   for (const eventType of MOUSE_EVENTS_TO_BLOCK) {
