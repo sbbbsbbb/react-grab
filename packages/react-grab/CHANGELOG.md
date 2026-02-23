@@ -1,5 +1,11 @@
 # react-grab
 
+## 0.1.19
+
+### Patch Changes
+
+- fix: gsap
+
 ## 0.1.18
 
 ### Patch Changes

@@ -1,5 +1,14 @@
 # @react-grab/codex
 
+## 0.1.19
+
+### Patch Changes
+
+- fix: gsap
+- Updated dependencies
+  - react-grab@0.1.19
+  - @react-grab/relay@0.1.19
+
 ## 0.1.18
 
 ### Patch Changes

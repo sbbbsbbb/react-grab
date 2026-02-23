@@ -1,6 +1,6 @@
 {
   "name": "@react-grab/gemini",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "bin": {
     "react-grab-gemini": "./dist/cli.cjs"
   },
