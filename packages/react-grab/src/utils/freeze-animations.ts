@@ -1,5 +1,6 @@
 import { FROZEN_ELEMENT_ATTRIBUTE } from "../constants.js";
 import { createStyleElement } from "./create-style-element.js";
+import { freezeGsap, unfreezeGsap } from "./freeze-gsap.js";
 
 const FROZEN_STYLES = `
 [${FROZEN_ELEMENT_ATTRIBUTE}],
@@ -37,8 +38,8 @@ export const freezeAllAnimations = (elements: Element[]): void => {
   if (elements.length === 0) return;
   if (areElementsSame(elements, lastInputElements)) return;
 
-  lastInputElements = [...elements];
   unfreezeAllAnimations();
+  lastInputElements = [...elements];
   ensureStylesInjected();
   frozenElements = elements;
 
@@ -75,6 +76,7 @@ export const freezeGlobalAnimations = (): void => {
     "data-react-grab-global-freeze",
     GLOBAL_FREEZE_STYLES,
   );
+  freezeGsap();
 };
 
 export const unfreezeGlobalAnimations = (): void => {
@@ -110,4 +112,5 @@ export const unfreezeGlobalAnimations = (): void => {
 
   globalAnimationStyleElement.remove();
   globalAnimationStyleElement = null;
+  unfreezeGsap();
 };
