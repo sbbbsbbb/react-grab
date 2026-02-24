@@ -58,6 +58,7 @@ import {
   KEYDOWN_SPAM_TIMEOUT_MS,
   DRAG_THRESHOLD_PX,
   ELEMENT_DETECTION_THROTTLE_MS,
+  PENDING_DETECTION_STALENESS_MS,
   COMPONENT_NAME_DEBOUNCE_MS,
   DRAG_PREVIEW_DEBOUNCE_MS,
   Z_INDEX_LABEL,
@@ -457,6 +458,9 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     };
 
     let lastElementDetectionTime = 0;
+    let pendingDetectionScheduledAt = 0;
+    let latestDetectionX = 0;
+    let latestDetectionY = 0;
     let dragPreviewDebounceTimerId: number | null = null;
     const [debouncedDragPointer, setDebouncedDragPointer] = createSignal<{
       x: number;
@@ -1788,12 +1792,28 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
 
       actions.setPointer({ x: clientX, y: clientY });
 
+      latestDetectionX = clientX;
+      latestDetectionY = clientY;
+
       const now = performance.now();
-      if (now - lastElementDetectionTime >= ELEMENT_DETECTION_THROTTLE_MS) {
+      const isDetectionPending =
+        pendingDetectionScheduledAt > 0 &&
+        now - pendingDetectionScheduledAt < PENDING_DETECTION_STALENESS_MS;
+      if (
+        now - lastElementDetectionTime >= ELEMENT_DETECTION_THROTTLE_MS &&
+        !isDetectionPending
+      ) {
         lastElementDetectionTime = now;
+        pendingDetectionScheduledAt = now;
         onIdle(() => {
-          const candidate = getElementAtPosition(clientX, clientY);
-          actions.setDetectedElement(candidate);
+          const candidate = getElementAtPosition(
+            latestDetectionX,
+            latestDetectionY,
+          );
+          if (candidate !== store.detectedElement) {
+            actions.setDetectedElement(candidate);
+          }
+          pendingDetectionScheduledAt = 0;
         });
       }
 

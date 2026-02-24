@@ -89,16 +89,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     return false;
   };
 
-  const measureContainer = () => {
-    if (containerRef && !isTagCurrentlyHovered) {
-      const rect = containerRef.getBoundingClientRect();
-      setMeasuredWidth(rect.width);
-      setMeasuredHeight(rect.height);
-    }
-    if (panelRef) {
-      setPanelWidth(panelRef.getBoundingClientRect().width);
-    }
-  };
+  let resizeObserver: ResizeObserver | undefined;
 
   const handleTagHoverChange = (hovered: boolean) => {
     isTagCurrentlyHovered = hovered;
@@ -133,13 +124,34 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
   };
 
   onMount(() => {
-    measureContainer();
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const rect = entry.target.getBoundingClientRect();
+        if (entry.target === containerRef && !isTagCurrentlyHovered) {
+          setMeasuredWidth(rect.width);
+          setMeasuredHeight(rect.height);
+        } else if (entry.target === panelRef) {
+          setPanelWidth(rect.width);
+        }
+      }
+    });
+    if (containerRef) {
+      const rect = containerRef.getBoundingClientRect();
+      setMeasuredWidth(rect.width);
+      setMeasuredHeight(rect.height);
+      resizeObserver.observe(containerRef);
+    }
+    if (panelRef) {
+      setPanelWidth(panelRef.getBoundingClientRect().width);
+      resizeObserver.observe(panelRef);
+    }
     window.addEventListener("scroll", handleViewportChange, true);
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("keydown", handleGlobalKeyDown, { capture: true });
   });
 
   onCleanup(() => {
+    resizeObserver?.disconnect();
     window.removeEventListener("scroll", handleViewportChange, true);
     window.removeEventListener("resize", handleViewportChange);
     window.removeEventListener("keydown", handleGlobalKeyDown, {
@@ -155,35 +167,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     }
   });
 
-  const sizeAffectingSignature = createMemo(() => [
-    props.tagName,
-    props.componentName,
-    props.elementsCount,
-    props.statusText,
-    props.inputValue,
-    props.hasAgent,
-    props.isPromptMode,
-    props.isPendingDismiss,
-    props.error,
-    props.isPendingAbort,
-    props.visible,
-    props.status,
-    props.actionCycleState?.items,
-    props.actionCycleState?.activeIndex,
-    props.actionCycleState?.isVisible,
-  ]);
-
-  createEffect(() => {
-    // HACK: Trigger measurement when content that affects size changes.
-    // Solid's fine-grained reactivity means we do not re-render the entire
-    // component on every prop change. Label positioning depends on measured
-    // width/height for centering, and width/height depends on rendered content.
-    // We therefore force a re-measure whenever any size-affecting input changes.
-    // Without this, switching from a short tag to a long component name can keep
-    // stale width and offset the label incorrectly.
-    void sizeAffectingSignature();
-    queueMicrotask(measureContainer);
-  });
 
   createEffect(() => {
     if (props.isPromptMode && inputRef && props.onSubmit) {
@@ -423,9 +406,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
             onDismiss={props.onDismiss}
             onUndo={props.onUndo}
             onFollowUpSubmit={props.onFollowUpSubmit}
-            onCopyStateChange={() => {
-              queueMicrotask(measureContainer);
-            }}
             onFadingChange={setIsInternalFading}
             onShowContextMenu={props.onShowContextMenu}
           />
