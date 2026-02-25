@@ -1,5 +1,13 @@
 # grab
 
+## 0.1.20
+
+### Patch Changes
+
+- fix: selection performacne
+- Updated dependencies
+  - @react-grab/cli@0.1.20
+
 ## 0.1.19
 
 ### Patch Changes

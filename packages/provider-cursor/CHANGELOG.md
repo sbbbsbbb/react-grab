@@ -1,5 +1,14 @@
 # @react-grab/cursor
 
+## 0.1.20
+
+### Patch Changes
+
+- fix: selection performacne
+- Updated dependencies
+  - react-grab@0.1.20
+  - @react-grab/relay@0.1.20
+
 ## 0.1.19
 
 ### Patch Changes

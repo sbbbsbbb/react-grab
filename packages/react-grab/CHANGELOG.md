@@ -1,5 +1,11 @@
 # react-grab
 
+## 0.1.20
+
+### Patch Changes
+
+- fix: selection performacne
+
 ## 0.1.19
 
 ### Patch Changes
