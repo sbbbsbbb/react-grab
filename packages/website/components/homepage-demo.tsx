@@ -10,8 +10,10 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { TextMorph } from "torph/react";
 import { TriangleAlert } from "lucide-react";
 import {
+  AGENT_CYCLE_INTERVAL_MS,
   DEFAULT_CHUNK_SIZE,
   STREAM_DEMO_BLOCK_DELAY_MS,
   STREAM_DEMO_CHUNK_DELAY_MS,
@@ -103,44 +105,63 @@ const ReactGrabIntro = (): ReactElement => (
   </div>
 );
 
-const ToolWithIcon = ({
-  icon,
-  name,
-}: {
+interface AgentEntry {
   icon: ReactNode;
   name: string;
-}): ReactElement => (
-  <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
-    {icon}
-    {name}
-  </span>
-);
+}
+
+const AGENTS: AgentEntry[] = [
+  {
+    icon: <IconClaude width={16} height={16} />,
+    name: "Claude Code",
+  },
+  {
+    icon: <IconCodex width={16} height={16} />,
+    name: "Codex",
+  },
+  {
+    icon: <IconCopilot width={18} height={18} />,
+    name: "Copilot",
+  },
+  {
+    icon: <IconCursor width={16} height={16} />,
+    name: "Cursor",
+  },
+];
+
+const CyclingAgent = (): ReactElement => {
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActiveIndex((previous) => (previous + 1) % AGENTS.length);
+    }, AGENT_CYCLE_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
+      <span className="relative inline-flex h-[16px] w-[18px] items-center justify-center self-center">
+        {AGENTS.map((agent, index) => (
+          <span
+            key={agent.name}
+            className="absolute inset-0 flex items-center justify-center transition-opacity duration-300"
+            style={{ opacity: index === activeIndex ? 1 : 0 }}
+          >
+            {agent.icon}
+          </span>
+        ))}
+      </span>
+      <TextMorph as="span" className="font-inherit">
+        {AGENTS[activeIndex].name}
+      </TextMorph>
+    </span>
+  );
+};
 
 const ToolsList = (): ReactElement => (
   <span className="text-pretty">
-    It makes{" "}
-    <ToolWithIcon
-      icon={<IconClaude width={16} height={16} className="translate-y-[2px]" />}
-      name="Claude Code"
-    />
-    ,{" "}
-    <ToolWithIcon
-      icon={<IconCodex width={16} height={16} className="translate-y-[2px]" />}
-      name="Codex"
-    />
-    ,{" "}
-    <ToolWithIcon
-      icon={
-        <IconCopilot width={18} height={18} className="translate-y-[2px]" />
-      }
-      name="Copilot"
-    />
-    ,{" "}
-    <ToolWithIcon
-      icon={<IconCursor width={16} height={16} className="translate-y-[2px]" />}
-      name="Cursor"
-    />{" "}
-    run up to{" "}
+    Get <CyclingAgent /> to the right code{" "}
     <BenchmarkTooltip
       href="/blog/intro"
       className="shimmer-text-pink inline-block touch-manipulation py-1"

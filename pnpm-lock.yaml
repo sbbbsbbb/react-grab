@@ -806,6 +806,9 @@ importers:
       tailwind-merge:
         specifier: ^3.4.0
         version: 3.4.0
+      torph:
+        specifier: ^0.0.5
+        version: 0.0.5(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
     devDependencies:
       '@tailwindcss/postcss':
         specifier: ^4
@@ -3420,8 +3423,8 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
-  '@sourcegraph/amp@0.0.1771838262-g353b96':
-    resolution: {integrity: sha512-uFAaUMheC6iSXII1rP9r16DPpkrFhklrXjNj0Wq3poUrAwjjJRE6BtnMcMC8RVfLGfwyc933fQh6QMumMoYkGw==}
+  '@sourcegraph/amp@0.0.1772107648-gbe4328':
+    resolution: {integrity: sha512-ekkK4vs/AWgEYVRanF6bZ7T0XrlF2jTEyIzDQaJVU/mugZ6dZsQ/d+8GX6si9DuvPXnelOh6cku74WcN198zmg==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -7601,6 +7604,23 @@ packages:
     resolution: {integrity: sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA==}
     engines: {node: '>=0.6'}
 
+  torph@0.0.5:
+    resolution: {integrity: sha512-A9mwvWouyRIIZ8Y9McJioZ4O5itSjgtfPQMGxU+qvA5MYaF31EY1Cq3OpOLT34wXLhsfOC7tto5Gzg0d6I3NQg==}
+    peerDependencies:
+      react: '>=18'
+      react-dom: '>=18'
+      svelte: '>=4'
+      vue: '>=3'
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
+      svelte:
+        optional: true
+      vue:
+        optional: true
+
   tr46@1.0.1:
     resolution: {integrity: sha512-dTpowEjclQ7Kgx5SdBkqRzVhERQXov8/l9Ft9dVM9fmg0W0KQSVaXX9T4i6twCPNtYiZM53lpSSUAwJbFPOHxA==}
 
@@ -10405,14 +10425,14 @@ snapshots:
 
   '@sourcegraph/amp-sdk@0.1.0-20251210081226-g90e3892':
     dependencies:
-      '@sourcegraph/amp': 0.0.1771838262-g353b96
+      '@sourcegraph/amp': 0.0.1772107648-gbe4328
       zod: 3.25.76
 
   '@sourcegraph/amp@0.0.1767830505-ga62310':
     dependencies:
       '@napi-rs/keyring': 1.1.9
 
-  '@sourcegraph/amp@0.0.1771838262-g353b96':
+  '@sourcegraph/amp@0.0.1772107648-gbe4328':
     dependencies:
       '@napi-rs/keyring': 1.1.9
 
@@ -14952,6 +14972,11 @@ snapshots:
       is-number: 7.0.0
 
   toidentifier@1.0.1: {}
+
+  torph@0.0.5(react-dom@19.2.1(react@19.2.1))(react@19.2.1):
+    optionalDependencies:
+      react: 19.2.1
+      react-dom: 19.2.1(react@19.2.1)
 
   tr46@1.0.1:
     dependencies:
