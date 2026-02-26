@@ -1486,7 +1486,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
         "transform-origin": getTransformOrigin(),
       }}
       onPointerDown={handlePointerDown}
-      onMouseEnter={() => props.onSelectHoverChange?.(true)}
+      onMouseEnter={() =>
+        !isCollapsed() && props.onSelectHoverChange?.(true)
+      }
       onMouseLeave={() => props.onSelectHoverChange?.(false)}
     >
       <div
