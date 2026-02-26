@@ -26,6 +26,17 @@ import {
 import { getTagName } from "../utils/get-tag-name.js";
 import { truncateString } from "../utils/truncate-string.js";
 
+const NON_COMPONENT_PREFIXES = new Set([
+  "_",
+  "$",
+  "motion.",
+  "styled.",
+  "chakra.",
+  "ark.",
+  "Primitive.",
+  "Slot.",
+]);
+
 const NEXT_INTERNAL_COMPONENT_NAMES = new Set([
   "InnerLayoutRouter",
   "RedirectErrorBoundary",
@@ -78,9 +89,11 @@ export const checkIsNextProject = (revalidate?: boolean): boolean => {
 };
 
 const checkIsInternalComponentName = (name: string): boolean => {
-  if (name.startsWith("_")) return true;
   if (NEXT_INTERNAL_COMPONENT_NAMES.has(name)) return true;
   if (REACT_INTERNAL_COMPONENT_NAMES.has(name)) return true;
+  for (const prefix of NON_COMPONENT_PREFIXES) {
+    if (name.startsWith(prefix)) return true;
+  }
   return false;
 };
 
