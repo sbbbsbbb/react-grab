@@ -353,8 +353,7 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
           <div class="min-h-0 [border-top-width:0.5px] border-t-solid border-t-[#D9D9D9] px-2 py-1.5">
             <div
               ref={highlightContainerRef}
-              class="relative flex flex-col max-h-[240px] overflow-y-auto -mx-2 -my-1.5"
-              style={{ "scrollbar-color": "rgba(0,0,0,0.15) transparent" }}
+              class="relative flex flex-col max-h-[240px] overflow-y-auto -mx-2 -my-1.5 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(0,0,0,0.15)_transparent]"
             >
               <div
                 ref={highlightRef}
