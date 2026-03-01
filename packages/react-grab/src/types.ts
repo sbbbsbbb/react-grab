@@ -212,11 +212,6 @@ export type ActivationMode = "toggle" | "hold";
 
 export interface ActionContextHooks {
   transformHtmlContent: (html: string, elements: Element[]) => Promise<string>;
-  transformScreenshot: (
-    blob: Blob,
-    elements: Element[],
-    bounds: ScreenshotBounds,
-  ) => Promise<Blob>;
   onOpenFile: (filePath: string, lineNumber?: number) => boolean | void;
   transformOpenFileUrl: (
     url: string,
@@ -236,8 +231,6 @@ export interface ActionContext {
   hooks: ActionContextHooks;
   performWithFeedback: (action: () => Promise<boolean>) => Promise<void>;
   hideContextMenu: () => void;
-  hideOverlay: () => void;
-  showOverlay: () => void;
   cleanup: () => void;
 }
 
@@ -248,6 +241,7 @@ export interface ContextMenuActionContext extends ActionContext {
 export interface ContextMenuAction {
   id: string;
   label: string;
+  target?: "context-menu";
   shortcut?: string;
   enabled?: boolean | ((context: ActionContext) => boolean);
   onAction: (context: ContextMenuActionContext) => void | Promise<void>;
@@ -272,18 +266,12 @@ export interface PerformWithFeedbackOptions {
   position?: { x: number; y: number };
 }
 
-export interface ScreenshotBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 export interface PluginHooks {
   onActivate?: () => void;
   onDeactivate?: () => void;
+  cancelPendingToolbarActions?: () => void;
   onElementHover?: (element: Element) => void;
-  onElementSelect?: (element: Element) => void;
+  onElementSelect?: (element: Element) => boolean | void | Promise<boolean>;
   onDragStart?: (startX: number, startY: number) => void;
   onDragEnd?: (elements: Element[], bounds: DragRect) => void;
   onBeforeCopy?: (elements: Element[]) => void | Promise<void>;
@@ -321,11 +309,6 @@ export interface PluginHooks {
     html: string,
     elements: Element[],
   ) => string | Promise<string>;
-  transformScreenshot?: (
-    blob: Blob,
-    elements: Element[],
-    bounds: ScreenshotBounds,
-  ) => Blob | Promise<Blob>;
   transformAgentContext?: (
     context: AgentContext,
     elements: Element[],
@@ -342,10 +325,22 @@ export interface PluginHooks {
   ) => string | Promise<string>;
 }
 
+export interface ToolbarMenuAction {
+  id: string;
+  label: string;
+  shortcut?: string;
+  target: "toolbar";
+  enabled?: boolean | (() => boolean);
+  isActive?: () => boolean;
+  onAction: () => void | Promise<void>;
+}
+
+export type PluginAction = ContextMenuAction | ToolbarMenuAction;
+
 export interface PluginConfig {
   theme?: DeepPartial<Theme>;
   options?: SettableOptions;
-  actions?: ContextMenuAction[];
+  actions?: PluginAction[];
   hooks?: PluginHooks;
   cleanup?: () => void;
 }
@@ -354,9 +349,9 @@ export interface Plugin {
   name: string;
   theme?: DeepPartial<Theme>;
   options?: SettableOptions;
-  actions?: ContextMenuAction[];
+  actions?: PluginAction[];
   hooks?: PluginHooks;
-  setup?: (api: ReactGrabAPI) => PluginConfig | void;
+  setup?: (api: ReactGrabAPI, hooks: ActionContextHooks) => PluginConfig | void;
 }
 
 export interface Options {
@@ -403,6 +398,7 @@ export interface ReactGrabAPI {
   activate: () => void;
   deactivate: () => void;
   toggle: () => void;
+  comment: () => void;
   isActive: () => boolean;
   isEnabled: () => boolean;
   setEnabled: (enabled: boolean) => void;
@@ -412,6 +408,7 @@ export interface ReactGrabAPI {
   dispose: () => void;
   copyElement: (elements: Element | Element[]) => Promise<boolean>;
   getSource: (element: Element) => Promise<SourceInfo | null>;
+  getStackContext: (element: Element) => Promise<string>;
   getState: () => ReactGrabState;
   setOptions: (options: SettableOptions) => void;
   registerPlugin: (plugin: Plugin) => void;
@@ -465,6 +462,7 @@ export interface HistoryItem {
   componentName?: string;
   elementsCount?: number;
   previewBounds?: OverlayBounds[];
+  elementSelectors?: string[];
   isComment: boolean;
   commentText?: string;
   timestamp: number;
@@ -526,9 +524,7 @@ export interface ReactGrabRendererProps {
   theme?: Required<Theme>;
   toolbarVisible?: boolean;
   isActive?: boolean;
-  isCommentMode?: boolean;
   onToggleActive?: () => void;
-  onComment?: () => void;
   enabled?: boolean;
   onToggleEnabled?: () => void;
   shakeCount?: number;
@@ -544,16 +540,20 @@ export interface ReactGrabRendererProps {
   contextMenuComponentName?: string;
   contextMenuHasFilePath?: boolean;
   actions?: ContextMenuAction[];
+  toolbarActions?: ToolbarMenuAction[];
   actionContext?: ActionContext;
   onContextMenuDismiss?: () => void;
   onContextMenuHide?: () => void;
   historyItems?: HistoryItem[];
   historyDisconnectedItemIds?: Set<string>;
   historyItemCount?: number;
+  clockFlashTrigger?: number;
   hasUnreadHistoryItems?: boolean;
   historyDropdownPosition?: DropdownAnchor | null;
   isHistoryPinned?: boolean;
   onToggleHistory?: () => void;
+  onCopyAll?: () => void;
+  onCopyAllHover?: (isHovered: boolean) => void;
   onHistoryButtonHover?: (isHovered: boolean) => void;
   onHistoryItemSelect?: (item: HistoryItem) => void;
   onHistoryItemRemove?: (item: HistoryItem) => void;
@@ -564,6 +564,12 @@ export interface ReactGrabRendererProps {
   onHistoryClear?: () => void;
   onHistoryDismiss?: () => void;
   onHistoryDropdownHover?: (isHovered: boolean) => void;
+  toolbarMenuPosition?: DropdownAnchor | null;
+  onToggleMenu?: () => void;
+  onToolbarMenuDismiss?: () => void;
+  clearPromptPosition?: DropdownAnchor | null;
+  onClearHistoryConfirm?: () => void;
+  onClearHistoryCancel?: () => void;
 }
 
 export interface GrabbedBox {
@@ -612,6 +618,8 @@ export interface BottomSectionProps {
 }
 
 export interface DiscardPromptProps {
+  label?: string;
+  cancelOnEscape?: boolean;
   onConfirm?: () => void;
   onCancel?: () => void;
 }

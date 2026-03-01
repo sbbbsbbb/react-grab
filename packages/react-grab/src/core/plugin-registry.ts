@@ -4,7 +4,9 @@ import type {
   PluginConfig,
   PluginHooks,
   Theme,
+  PluginAction,
   ContextMenuAction,
+  ToolbarMenuAction,
   ReactGrabAPI,
   ReactGrabState,
   PromptModeContext,
@@ -18,7 +20,6 @@ import type {
   SettableOptions,
   AgentContext,
   ActionContext,
-  ScreenshotBounds,
 } from "../types.js";
 import { DEFAULT_THEME, deepMergeTheme } from "./theme.js";
 import { DEFAULT_KEY_HOLD_DURATION_MS } from "../constants.js";
@@ -52,6 +53,7 @@ interface PluginStoreState {
   theme: Required<Theme>;
   options: OptionsState;
   actions: ContextMenuAction[];
+  toolbarActions: ToolbarMenuAction[];
 }
 
 type HookName = keyof PluginHooks;
@@ -64,12 +66,17 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
     theme: DEFAULT_THEME,
     options: { ...DEFAULT_OPTIONS, ...initialOptions },
     actions: [],
+    toolbarActions: [],
   });
+
+  const isToolbarAction = (action: PluginAction): action is ToolbarMenuAction =>
+    action.target === "toolbar";
 
   const recomputeStore = () => {
     let mergedTheme: Required<Theme> = DEFAULT_THEME;
     let mergedOptions: OptionsState = { ...DEFAULT_OPTIONS, ...initialOptions };
-    const allActions: ContextMenuAction[] = [];
+    const allContextMenuActions: ContextMenuAction[] = [];
+    const allToolbarActions: ToolbarMenuAction[] = [];
 
     for (const { config } of plugins.values()) {
       if (config.theme) {
@@ -81,7 +88,20 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
       }
 
       if (config.actions) {
-        allActions.push(...config.actions);
+        for (const action of config.actions) {
+          if (isToolbarAction(action)) {
+            const originalOnAction = action.onAction;
+            allToolbarActions.push({
+              ...action,
+              onAction: () => {
+                callHook("cancelPendingToolbarActions");
+                originalOnAction();
+              },
+            });
+          } else {
+            allContextMenuActions.push(action);
+          }
+        }
       }
     }
 
@@ -89,7 +109,8 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
 
     setStore("theme", mergedTheme);
     setStore("options", mergedOptions);
-    setStore("actions", allActions);
+    setStore("actions", allContextMenuActions);
+    setStore("toolbarActions", allToolbarActions);
   };
 
   const setOptions = (optionUpdates: SettableOptions) => {
@@ -110,7 +131,7 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
       unregister(plugin.name);
     }
 
-    const config: PluginConfig = plugin.setup?.(api) ?? {};
+    const config: PluginConfig = plugin.setup?.(api, hooks) ?? {};
 
     if (plugin.theme) {
       config.theme = config.theme
@@ -247,7 +268,25 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
     onActivate: () => callHook("onActivate"),
     onDeactivate: () => callHook("onDeactivate"),
     onElementHover: (element: Element) => callHook("onElementHover", element),
-    onElementSelect: (element: Element) => callHook("onElementSelect", element),
+    onElementSelect: (
+      element: Element,
+    ): { wasIntercepted: boolean; pendingResult?: Promise<boolean> } => {
+      let wasIntercepted = false;
+      let pendingResult: Promise<boolean> | undefined;
+      for (const { config } of plugins.values()) {
+        const hook = config.hooks?.onElementSelect;
+        if (hook) {
+          const result = hook(element);
+          if (result === true) {
+            wasIntercepted = true;
+          } else if (result instanceof Promise) {
+            wasIntercepted = true;
+            pendingResult = result;
+          }
+        }
+      }
+      return { wasIntercepted, pendingResult };
+    },
     onDragStart: (startX: number, startY: number) =>
       callHook("onDragStart", startX, startY),
     onDragEnd: (elements: Element[], bounds: DragRect) =>
@@ -282,15 +321,11 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
       callHook("onCrosshair", visible, context),
     onContextMenu: (element: Element, position: { x: number; y: number }) =>
       callHook("onContextMenu", element, position),
+    cancelPendingToolbarActions: () => callHook("cancelPendingToolbarActions"),
     onOpenFile: (filePath: string, lineNumber?: number) =>
       callHookWithHandled("onOpenFile", filePath, lineNumber),
     transformHtmlContent: async (html: string, elements: Element[]) =>
       callHookReduce("transformHtmlContent", html, elements),
-    transformScreenshot: async (
-      blob: Blob,
-      elements: Element[],
-      bounds: ScreenshotBounds,
-    ) => callHookReduce("transformScreenshot", blob, elements, bounds),
     transformAgentContext: async (context: AgentContext, elements: Element[]) =>
       callHookReduce("transformAgentContext", context, elements),
     transformActionContext: (context: ActionContext) =>

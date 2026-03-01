@@ -9,6 +9,7 @@ import type {
 import { OFFSCREEN_POSITION } from "../constants.js";
 import { createElementBounds } from "../utils/create-element-bounds.js";
 import { isElementConnected } from "../utils/is-element-connected.js";
+import { recalculateSessionPosition } from "../utils/recalculate-session-position.js";
 
 interface Position {
   x: number;
@@ -262,23 +263,27 @@ const createGrabStore = (input: GrabStoreInput) => {
     },
 
     deactivate: () => {
-      setStore("current", { state: "idle" });
-      setStore("wasActivatedByToggle", false);
-      setStore("pendingCommentMode", false);
-      setStore("inputText", "");
-      setStore("frozenElement", null);
-      setStore("frozenElements", []);
-      setStore("frozenDragRect", null);
-      setStore("pendingClickData", null);
-      setStore("replySessionId", null);
-      setStore("pendingAbortSessionId", null);
-      setStore("activationTimestamp", null);
-      setStore("previouslyFocusedElement", null);
-      setStore("contextMenuPosition", null);
-      setStore("contextMenuElement", null);
-      setStore("contextMenuClickOffset", null);
-      setStore("selectedAgent", null);
-      setStore("lastCopiedElement", null);
+      setStore(
+        produce((draft) => {
+          draft.current = { state: "idle" };
+          draft.wasActivatedByToggle = false;
+          draft.pendingCommentMode = false;
+          draft.inputText = "";
+          draft.frozenElement = null;
+          draft.frozenElements = [];
+          draft.frozenDragRect = null;
+          draft.pendingClickData = null;
+          draft.replySessionId = null;
+          draft.pendingAbortSessionId = null;
+          draft.activationTimestamp = null;
+          draft.previouslyFocusedElement = null;
+          draft.contextMenuPosition = null;
+          draft.contextMenuElement = null;
+          draft.contextMenuClickOffset = null;
+          draft.selectedAgent = null;
+          draft.lastCopiedElement = null;
+        }),
+      );
     },
 
     toggle: () => {
@@ -652,20 +657,11 @@ const createGrabStore = (input: GrabStoreInput) => {
         if (isElementConnected(element)) {
           const newBounds = createElementBounds(element);
           const oldFirstBounds = session.selectionBounds[0];
-          let updatedPosition = session.position;
-
-          if (oldFirstBounds) {
-            const oldCenterX = oldFirstBounds.x + oldFirstBounds.width / 2;
-            const oldHalfWidth = oldFirstBounds.width / 2;
-            const offsetX = session.position.x - oldCenterX;
-            const offsetRatio = oldHalfWidth > 0 ? offsetX / oldHalfWidth : 0;
-            const newCenterX = newBounds.x + newBounds.width / 2;
-            const newHalfWidth = newBounds.width / 2;
-            updatedPosition = {
-              ...session.position,
-              x: newCenterX + offsetRatio * newHalfWidth,
-            };
-          }
+          const updatedPosition = recalculateSessionPosition({
+            currentPosition: session.position,
+            previousBounds: oldFirstBounds,
+            nextBounds: newBounds,
+          });
 
           updatedSessions.set(sessionId, {
             ...session,

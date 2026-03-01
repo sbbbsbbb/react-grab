@@ -28,11 +28,9 @@ const MoreOptionsButton: Component<MoreOptionsButtonProps> = (props) => {
       class="flex items-center justify-center size-[18px] rounded-sm cursor-pointer bg-transparent hover:bg-black/10 text-black/30 hover:text-black border-none outline-none p-0 shrink-0 press-scale"
       // HACK: Native events with stopImmediatePropagation needed to block document-level handlers in the overlay system
       on:pointerdown={(event) => {
-        event.stopPropagation();
         event.stopImmediatePropagation();
       }}
       on:click={(event) => {
-        event.stopPropagation();
         event.stopImmediatePropagation();
         props.onClick();
       }}
@@ -53,6 +51,14 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
     props.statusText,
   );
   const [followUpInput, setFollowUpInput] = createSignal("");
+
+  const handleShowContextMenu = () => {
+    if (fadeTimeoutId !== undefined) window.clearTimeout(fadeTimeoutId);
+    if (dismissTimeoutId !== undefined) window.clearTimeout(dismissTimeoutId);
+    setIsFading(true);
+    props.onFadingChange?.(true);
+    props.onShowContextMenu?.();
+  };
 
   const handleAccept = () => {
     if (didCopy()) return;
@@ -86,7 +92,6 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
     const isEscape = event.code === "Escape";
 
     if (!isUndoRedo) {
-      event.stopPropagation();
       event.stopImmediatePropagation();
     }
 
@@ -178,7 +183,7 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
           </span>
           <div class="contain-layout shrink-0 flex items-center gap-2 h-fit">
             <Show when={props.onShowContextMenu && !props.supportsFollowUp}>
-              <MoreOptionsButton onClick={() => props.onShowContextMenu?.()} />
+              <MoreOptionsButton onClick={handleShowContextMenu} />
             </Show>
             <Show when={props.supportsUndo && props.onUndo}>
               <button
@@ -219,7 +224,7 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
             {displayStatusText()}
           </span>
           <Show when={props.onShowContextMenu && !props.supportsFollowUp}>
-            <MoreOptionsButton onClick={() => props.onShowContextMenu?.()} />
+            <MoreOptionsButton onClick={handleShowContextMenu} />
           </Show>
         </div>
       </Show>

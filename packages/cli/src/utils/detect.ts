@@ -229,9 +229,7 @@ const hasReactDependency = (projectPath: string): boolean => {
   }
 };
 
-const buildReactProject = (
-  projectPath: string,
-): WorkspaceProject | null => {
+const buildReactProject = (projectPath: string): WorkspaceProject | null => {
   const framework = detectFramework(projectPath);
   const hasReact = hasReactDependency(projectPath);
   if (!hasReact && framework === "unknown") return null;
@@ -246,9 +244,7 @@ const buildReactProject = (
   return { name, path: projectPath, framework, hasReact };
 };
 
-const findWorkspaceProjects = (
-  projectRoot: string,
-): WorkspaceProject[] => {
+const findWorkspaceProjects = (projectRoot: string): WorkspaceProject[] => {
   const patterns = getWorkspacePatterns(projectRoot);
   const projects: WorkspaceProject[] = [];
 
@@ -408,6 +404,8 @@ const AGENT_PACKAGES = [
   "@react-grab/gemini",
   "@react-grab/amp",
   "@react-grab/ami",
+  "@react-grab/droid",
+  "@react-grab/copilot",
   "@react-grab/mcp",
 ];
 
@@ -477,7 +475,9 @@ export type AgentCLI =
   | "opencode"
   | "codex"
   | "gemini"
-  | "amp";
+  | "amp"
+  | "copilot"
+  | "droid";
 
 const AGENT_CLI_COMMANDS: AgentCLI[] = [
   "claude",
@@ -486,6 +486,8 @@ const AGENT_CLI_COMMANDS: AgentCLI[] = [
   "codex",
   "gemini",
   "amp",
+  "copilot",
+  "droid",
 ];
 
 const isCommandAvailable = (command: string): boolean => {

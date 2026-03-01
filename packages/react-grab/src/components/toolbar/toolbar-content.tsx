@@ -2,18 +2,16 @@ import type { Component, JSX } from "solid-js";
 import { cn } from "../../utils/cn.js";
 import { PANEL_STYLES } from "../../constants.js";
 import { IconSelect } from "../icons/icon-select.jsx";
-import { IconComment } from "../icons/icon-comment.jsx";
 import { IconChevron } from "../icons/icon-chevron.jsx";
-import { getToolbarIconColor } from "../../utils/get-toolbar-icon-color.js";
 import {
   getExpandGridClass,
   getButtonSpacingClass,
   getMinDimensionClass,
+  getHitboxConstraintClass,
 } from "../../utils/toolbar-layout.js";
 
 export interface ToolbarContentProps {
   isActive?: boolean;
-  isCommentMode?: boolean;
   enabled?: boolean;
   isCollapsed?: boolean;
   snapEdge?: "top" | "bottom" | "left" | "right";
@@ -21,7 +19,6 @@ export interface ToolbarContentProps {
   onAnimationEnd?: () => void;
   onPanelClick?: (event: MouseEvent) => void;
   selectButton?: JSX.Element;
-  commentButton?: JSX.Element;
   historyButton?: JSX.Element;
   toggleButton?: JSX.Element;
   collapseButton?: JSX.Element;
@@ -40,6 +37,7 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
 
   const buttonSpacingClass = () => getButtonSpacingClass(isVertical());
   const minDimensionClass = () => getMinDimensionClass(isVertical());
+  const hitboxConstraintClass = () => getHitboxConstraintClass(isVertical());
 
   const collapsedEdgeClasses = () => {
     if (!props.isCollapsed) return "";
@@ -71,39 +69,19 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
 
   const defaultSelectButton = () => (
     <button
+      aria-label={props.isActive ? "Stop selecting element" : "Select element"}
+      aria-pressed={Boolean(props.isActive)}
       class={cn(
         "contain-layout flex items-center justify-center cursor-pointer interactive-scale touch-hitbox",
         buttonSpacingClass(),
+        hitboxConstraintClass(),
       )}
     >
       <IconSelect
         size={14}
         class={cn(
           "transition-colors",
-          getToolbarIconColor(
-            Boolean(props.isActive) && !props.isCommentMode,
-            Boolean(props.isCommentMode),
-          ),
-        )}
-      />
-    </button>
-  );
-
-  const defaultCommentButton = () => (
-    <button
-      class={cn(
-        "contain-layout flex items-center justify-center cursor-pointer interactive-scale touch-hitbox",
-        buttonSpacingClass(),
-      )}
-    >
-      <IconComment
-        size={14}
-        class={cn(
-          "transition-colors",
-          getToolbarIconColor(
-            Boolean(props.isCommentMode),
-            Boolean(props.isActive) && !props.isCommentMode,
-          ),
+          props.isActive ? "text-black" : "text-black/70",
         )}
       />
     </button>
@@ -111,6 +89,8 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
 
   const defaultToggleButton = () => (
     <button
+      aria-label={props.enabled ? "Disable React Grab" : "Enable React Grab"}
+      aria-pressed={Boolean(props.enabled)}
       class={cn(
         "contain-layout flex items-center justify-center cursor-pointer interactive-scale outline-none",
         isVertical() ? "my-0.5" : "mx-0.5",
@@ -136,7 +116,10 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
   );
 
   const defaultCollapseButton = () => (
-    <button class="contain-layout shrink-0 flex items-center justify-center cursor-pointer interactive-scale">
+    <button
+      aria-label={props.isCollapsed ? "Expand toolbar" : "Collapse toolbar"}
+      class="contain-layout shrink-0 flex items-center justify-center cursor-pointer interactive-scale"
+    >
       <IconChevron
         class={cn(
           "text-[#B3B3B3] transition-transform duration-150",
@@ -183,16 +166,6 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
           >
             <div class={cn("relative overflow-visible", minDimensionClass())}>
               {props.selectButton ?? defaultSelectButton()}
-            </div>
-          </div>
-          <div
-            class={cn(
-              "grid transition-all duration-150 ease-out",
-              expandGridClass(Boolean(props.enabled)),
-            )}
-          >
-            <div class={cn("relative overflow-visible", minDimensionClass())}>
-              {props.commentButton ?? defaultCommentButton()}
             </div>
           </div>
           {props.historyButton}

@@ -13,30 +13,31 @@ import type { HistoryItem, DropdownAnchor } from "../types.js";
 import {
   DROPDOWN_ANCHOR_GAP_PX,
   DROPDOWN_ANIMATION_DURATION_MS,
+  DROPDOWN_EDGE_TRANSFORM_ORIGIN,
   DROPDOWN_ICON_SIZE_PX,
   DROPDOWN_MAX_WIDTH_PX,
   DROPDOWN_MIN_WIDTH_PX,
+  DROPDOWN_OFFSCREEN_POSITION,
   DROPDOWN_VIEWPORT_PADDING_PX,
   FEEDBACK_DURATION_MS,
+  SAFE_POLYGON_BUFFER_PX,
   PANEL_STYLES,
 } from "../constants.js";
-import { clampToViewport } from "../utils/clamp-to-viewport.js";
+import { createSafePolygonTracker } from "../utils/safe-polygon.js";
+import { getAnchoredDropdownPosition } from "../utils/get-anchored-dropdown-position.js";
 import { cn } from "../utils/cn.js";
 import { IconTrash } from "./icons/icon-trash.jsx";
 import { IconCopy } from "./icons/icon-copy.jsx";
 import { IconCheck } from "./icons/icon-check.jsx";
 import { Tooltip } from "./tooltip.jsx";
+import {
+  nativeCancelAnimationFrame,
+  nativeRequestAnimationFrame,
+} from "../utils/native-raf.js";
+import { createMenuHighlight } from "../utils/create-menu-highlight.js";
 
-const DEFAULT_OFFSCREEN_POSITION = { left: -9999, top: -9999 };
 const ITEM_ACTION_CLASS =
   "flex items-center justify-center cursor-pointer text-black/25 transition-colors press-scale";
-
-const EDGE_TO_TRANSFORM_ORIGIN: Record<string, string> = {
-  left: "left center",
-  right: "right center",
-  top: "center top",
-  bottom: "center bottom",
-};
 
 interface HistoryDropdownProps {
   position: DropdownAnchor | null;
@@ -72,6 +73,32 @@ const getHistoryItemDisplayName = (item: HistoryItem): string => {
 
 export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
   let containerRef: HTMLDivElement | undefined;
+  const {
+    containerRef: highlightContainerRef,
+    highlightRef,
+    updateHighlight,
+    clearHighlight,
+  } = createMenuHighlight();
+
+  const safePolygonTracker = createSafePolygonTracker();
+
+  const getToolbarTargetRects = () => {
+    if (!containerRef) return null;
+    const rootNode = containerRef.getRootNode() as Document | ShadowRoot;
+    const toolbar = rootNode.querySelector<HTMLElement>(
+      "[data-react-grab-toolbar]",
+    );
+    if (!toolbar) return null;
+    const rect = toolbar.getBoundingClientRect();
+    return [
+      {
+        x: rect.x - SAFE_POLYGON_BUFFER_PX,
+        y: rect.y - SAFE_POLYGON_BUFFER_PX,
+        width: rect.width + SAFE_POLYGON_BUFFER_PX * 2,
+        height: rect.height + SAFE_POLYGON_BUFFER_PX * 2,
+      },
+    ];
+  };
 
   const [measuredWidth, setMeasuredWidth] = createSignal(0);
   const [measuredHeight, setMeasuredHeight] = createSignal(0);
@@ -91,7 +118,8 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
   const isVisible = () => props.position !== null;
   const [shouldMount, setShouldMount] = createSignal(false);
   const [isAnimatedIn, setIsAnimatedIn] = createSignal(false);
-  const [lastAnchorEdge, setLastAnchorEdge] = createSignal<string>("bottom");
+  const [lastAnchorEdge, setLastAnchorEdge] =
+    createSignal<DropdownAnchor["edge"]>("bottom");
 
   const measureContainer = () => {
     if (containerRef) {
@@ -106,9 +134,9 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
       clearTimeout(exitAnimationTimeout);
       setShouldMount(true);
       if (enterAnimationFrameId !== undefined)
-        cancelAnimationFrame(enterAnimationFrameId);
+        nativeCancelAnimationFrame(enterAnimationFrameId);
       // HACK: rAF measures then forces reflow so the browser commits the correct position before transitioning in
-      enterAnimationFrameId = requestAnimationFrame(() => {
+      enterAnimationFrameId = nativeRequestAnimationFrame(() => {
         measureContainer();
         // HACK: Reading offsetHeight forces a synchronous reflow so the browser commits layout before the transition starts
         void containerRef?.offsetHeight;
@@ -116,7 +144,7 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
       });
     } else {
       if (enterAnimationFrameId !== undefined)
-        cancelAnimationFrame(enterAnimationFrameId);
+        nativeCancelAnimationFrame(enterAnimationFrameId);
       setIsAnimatedIn(false);
       exitAnimationTimeout = setTimeout(() => {
         setShouldMount(false);
@@ -137,59 +165,24 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
     ),
   );
 
-  const computedPosition = () => {
-    const anchor = props.position;
-    const width = measuredWidth();
-    const height = measuredHeight();
-
-    if (!anchor || width === 0 || height === 0) {
-      return DEFAULT_OFFSCREEN_POSITION;
-    }
-
-    const { edge } = anchor;
-
-    let rawLeft: number;
-    let rawTop: number;
-
-    if (edge === "left" || edge === "right") {
-      rawLeft =
-        edge === "left"
-          ? anchor.x + DROPDOWN_ANCHOR_GAP_PX
-          : anchor.x - width - DROPDOWN_ANCHOR_GAP_PX;
-      rawTop = anchor.y - height / 2;
-    } else {
-      rawLeft = anchor.x - width / 2;
-      rawTop =
-        edge === "top"
-          ? anchor.y + DROPDOWN_ANCHOR_GAP_PX
-          : anchor.y - height - DROPDOWN_ANCHOR_GAP_PX;
-    }
-
-    return {
-      left: clampToViewport(
-        rawLeft,
-        width,
-        window.innerWidth,
-        DROPDOWN_VIEWPORT_PADDING_PX,
-      ),
-      top: clampToViewport(
-        rawTop,
-        height,
-        window.innerHeight,
-        DROPDOWN_VIEWPORT_PADDING_PX,
-      ),
-    };
-  };
-
   const displayPosition = createMemo(
     (previousPosition: { left: number; top: number }) => {
-      const position = computedPosition();
-      if (position.left !== DEFAULT_OFFSCREEN_POSITION.left) {
+      const position = getAnchoredDropdownPosition({
+        anchor: props.position,
+        measuredWidth: measuredWidth(),
+        measuredHeight: measuredHeight(),
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        anchorGapPx: DROPDOWN_ANCHOR_GAP_PX,
+        viewportPaddingPx: DROPDOWN_VIEWPORT_PADDING_PX,
+        offscreenPosition: DROPDOWN_OFFSCREEN_POSITION,
+      });
+      if (position.left !== DROPDOWN_OFFSCREEN_POSITION.left) {
         return position;
       }
       return previousPosition;
     },
-    DEFAULT_OFFSCREEN_POSITION,
+    DROPDOWN_OFFSCREEN_POSITION,
   );
 
   const clampedMaxWidth = () =>
@@ -230,8 +223,9 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
       clearTimeout(copyItemFeedbackTimeout);
       clearTimeout(exitAnimationTimeout);
       if (enterAnimationFrameId !== undefined)
-        cancelAnimationFrame(enterAnimationFrameId);
+        nativeCancelAnimationFrame(enterAnimationFrameId);
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
+      safePolygonTracker.stop();
     });
   });
 
@@ -247,7 +241,7 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
           left: `${displayPosition().left}px`,
           "z-index": "2147483647",
           "pointer-events": isAnimatedIn() ? "auto" : "none",
-          "transform-origin": EDGE_TO_TRANSFORM_ORIGIN[lastAnchorEdge()],
+          "transform-origin": DROPDOWN_EDGE_TRANSFORM_ORIGIN[lastAnchorEdge()],
           opacity: isAnimatedIn() ? "1" : "0",
           transform: isAnimatedIn() ? "scale(1)" : "scale(0.95)",
         }}
@@ -255,8 +249,22 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
         onMouseDown={handleMenuEvent}
         onClick={handleMenuEvent}
         onContextMenu={handleMenuEvent}
-        onMouseEnter={() => props.onDropdownHover?.(true)}
-        onMouseLeave={() => props.onDropdownHover?.(false)}
+        onMouseEnter={() => {
+          safePolygonTracker.stop();
+          props.onDropdownHover?.(true);
+        }}
+        onMouseLeave={(event: MouseEvent) => {
+          const targetRects = getToolbarTargetRects();
+          if (targetRects) {
+            safePolygonTracker.start(
+              { x: event.clientX, y: event.clientY },
+              targetRects,
+              () => props.onDropdownHover?.(false),
+            );
+            return;
+          }
+          props.onDropdownHover?.(false);
+        }}
       >
         <div
           class={cn(
@@ -344,15 +352,19 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
 
           <div class="min-h-0 [border-top-width:0.5px] border-t-solid border-t-[#D9D9D9] px-2 py-1.5">
             <div
-              class="flex flex-col max-h-[240px] overflow-y-auto -mx-2 -my-1.5"
-              style={{ "scrollbar-color": "rgba(0,0,0,0.15) transparent" }}
+              ref={highlightContainerRef}
+              class="relative flex flex-col max-h-[240px] overflow-y-auto -mx-2 -my-1.5 [scrollbar-width:thin] [scrollbar-color:transparent_transparent] hover:[scrollbar-color:rgba(0,0,0,0.15)_transparent]"
             >
+              <div
+                ref={highlightRef}
+                class="pointer-events-none absolute bg-black/5 opacity-0 transition-[top,left,width,height,opacity] duration-75 ease-out"
+              />
               <For each={props.items}>
                 {(item) => (
                   <div
                     data-react-grab-ignore-events
                     data-react-grab-history-item
-                    class="group contain-layout flex items-start justify-between w-full px-2 py-1 cursor-pointer hover:bg-black/5 focus-within:bg-black/5 text-left gap-2"
+                    class="group relative z-1 contain-layout flex items-start justify-between w-full px-2 py-1 cursor-pointer text-left gap-2"
                     classList={{
                       "opacity-40 hover:opacity-100": Boolean(
                         props.disconnectedItemIds?.has(item.id),
@@ -379,8 +391,18 @@ export const HistoryDropdown: Component<HistoryDropdownProps> = (props) => {
                         props.onSelectItem?.(item);
                       }
                     }}
-                    onMouseEnter={() => props.onItemHover?.(item.id)}
-                    onMouseLeave={() => props.onItemHover?.(null)}
+                    onMouseEnter={(event) => {
+                      if (!props.disconnectedItemIds?.has(item.id)) {
+                        props.onItemHover?.(item.id);
+                      }
+                      updateHighlight(event.currentTarget);
+                    }}
+                    onMouseLeave={() => {
+                      props.onItemHover?.(null);
+                      clearHighlight();
+                    }}
+                    onFocus={(event) => updateHighlight(event.currentTarget)}
+                    onBlur={clearHighlight}
                   >
                     <span class="flex flex-col min-w-0 flex-1">
                       <span class="text-[12px] leading-4 font-sans font-medium text-black truncate">

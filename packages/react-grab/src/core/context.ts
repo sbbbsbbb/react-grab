@@ -2,6 +2,9 @@ import {
   isSourceFile,
   normalizeFileName,
   getOwnerStack,
+  formatOwnerStack,
+  hasDebugStack,
+  parseStack,
   StackFrame,
 } from "bippy/source";
 import { isCapitalized } from "../utils/is-capitalized.js";
@@ -11,15 +14,28 @@ import {
   getDisplayName,
   isCompositeFiber,
   traverseFiber,
+  type Fiber,
 } from "bippy";
 import {
   PREVIEW_TEXT_MAX_LENGTH,
   PREVIEW_ATTR_VALUE_MAX_LENGTH,
   PREVIEW_MAX_ATTRS,
   PREVIEW_PRIORITY_ATTRS,
+  SYMBOLICATION_TIMEOUT_MS,
 } from "../constants.js";
 import { getTagName } from "../utils/get-tag-name.js";
 import { truncateString } from "../utils/truncate-string.js";
+
+const NON_COMPONENT_PREFIXES = new Set([
+  "_",
+  "$",
+  "motion.",
+  "styled.",
+  "chakra.",
+  "ark.",
+  "Primitive.",
+  "Slot.",
+]);
 
 const NEXT_INTERNAL_COMPONENT_NAMES = new Set([
   "InnerLayoutRouter",
@@ -57,18 +73,27 @@ const REACT_INTERNAL_COMPONENT_NAMES = new Set([
   "SuspenseList",
 ]);
 
-const checkIsNextProject = (): boolean => {
-  if (typeof document === "undefined") return false;
-  return Boolean(
-    document.getElementById("__NEXT_DATA__") ||
-    document.querySelector("nextjs-portal"),
-  );
+let cachedIsNextProject: boolean | undefined;
+
+export const checkIsNextProject = (revalidate?: boolean): boolean => {
+  if (revalidate) {
+    cachedIsNextProject = undefined;
+  }
+  cachedIsNextProject ??=
+    typeof document !== "undefined" &&
+    Boolean(
+      document.getElementById("__NEXT_DATA__") ||
+      document.querySelector("nextjs-portal"),
+    );
+  return cachedIsNextProject;
 };
 
 const checkIsInternalComponentName = (name: string): boolean => {
-  if (name.startsWith("_")) return true;
   if (NEXT_INTERNAL_COMPONENT_NAMES.has(name)) return true;
   if (REACT_INTERNAL_COMPONENT_NAMES.has(name)) return true;
+  for (const prefix of NON_COMPONENT_PREFIXES) {
+    if (name.startsWith(prefix)) return true;
+  }
   return false;
 };
 
@@ -81,6 +106,189 @@ export const checkIsSourceComponentName = (name: string): boolean => {
   return true;
 };
 
+const SERVER_COMPONENT_URL_PREFIXES = ["about://React/", "rsc://React/"];
+
+const isServerComponentUrl = (url: string): boolean =>
+  SERVER_COMPONENT_URL_PREFIXES.some((prefix) => url.startsWith(prefix));
+
+const devirtualizeServerUrl = (url: string): string => {
+  for (const prefix of SERVER_COMPONENT_URL_PREFIXES) {
+    if (!url.startsWith(prefix)) continue;
+    const environmentEndIndex = url.indexOf("/", prefix.length);
+    const querySuffixIndex = url.lastIndexOf("?");
+    if (environmentEndIndex > -1 && querySuffixIndex > -1) {
+      return decodeURI(url.slice(environmentEndIndex + 1, querySuffixIndex));
+    }
+  }
+  return url;
+};
+
+interface NextJsOriginalFrame {
+  file: string | null;
+  line1: number | null;
+  column1: number | null;
+  ignored: boolean;
+}
+
+interface NextJsFrameResult {
+  status: string;
+  value?: { originalStackFrame: NextJsOriginalFrame | null };
+}
+
+interface NextJsRequestFrame {
+  file: string;
+  methodName: string;
+  line1: number | null;
+  column1: number | null;
+  arguments: string[];
+}
+
+const symbolicateServerFrames = async (
+  frames: StackFrame[],
+): Promise<StackFrame[]> => {
+  const serverFrameIndices: number[] = [];
+  const requestFrames: NextJsRequestFrame[] = [];
+
+  for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+    const frame = frames[frameIndex];
+    if (!frame.isServer || !frame.fileName) continue;
+
+    serverFrameIndices.push(frameIndex);
+    requestFrames.push({
+      file: devirtualizeServerUrl(frame.fileName),
+      methodName: frame.functionName ?? "<unknown>",
+      line1: frame.lineNumber ?? null,
+      column1: frame.columnNumber ?? null,
+      arguments: [],
+    });
+  }
+
+  if (requestFrames.length === 0) return frames;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    SYMBOLICATION_TIMEOUT_MS,
+  );
+
+  try {
+    // Next.js dev server (>=15.2) exposes a batched symbolication endpoint that resolves
+    // bundled/virtual stack frames back to original source locations via source maps.
+    //
+    // Server components produce virtual URLs like "rsc://React/Server/webpack-internal:///..."
+    // that have no real file on disk. The dev server reads the bundler's source maps
+    // (webpack or turbopack) and returns the original file path, line, and column for each frame.
+    //
+    // We POST an array of frames and get back PromiseSettledResult<OriginalStackFrameResponse>[]:
+    //
+    //   POST /__nextjs_original-stack-frames
+    //   { frames: [{ file, methodName, lineNumber, column, arguments }],
+    //     isServer: true, isEdgeServer: false, isAppDirectory: true }
+    //
+    //   Response: [{ status: "fulfilled",
+    //     value: { originalStackFrame: { file, lineNumber, column, ignored } } }]
+    //
+    // Introduced by vercel/next.js#75557 (batched POST, replaces legacy per-frame GET).
+    // Handler: packages/next/src/client/components/react-dev-overlay/server/middleware-webpack.ts
+    // Types:   packages/next/src/client/components/react-dev-overlay/server/shared.ts
+    const response = await fetch("/__nextjs_original-stack-frames", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        frames: requestFrames,
+        isServer: true,
+        isEdgeServer: false,
+        isAppDirectory: true,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) return frames;
+
+    const results = (await response.json()) as NextJsFrameResult[];
+    const resolvedFrames = [...frames];
+
+    for (let i = 0; i < serverFrameIndices.length; i++) {
+      const result = results[i];
+      if (result?.status !== "fulfilled") continue;
+
+      const resolved = result.value?.originalStackFrame;
+      if (!resolved?.file || resolved.ignored) continue;
+
+      const originalFrameIndex = serverFrameIndices[i];
+      resolvedFrames[originalFrameIndex] = {
+        ...frames[originalFrameIndex],
+        fileName: resolved.file,
+        lineNumber: resolved.line1 ?? undefined,
+        columnNumber: resolved.column1 ?? undefined,
+        isSymbolicated: true,
+      };
+    }
+
+    return resolvedFrames;
+  } catch {
+    return frames;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const extractServerFramesFromDebugStack = (
+  rootFiber: Fiber,
+): Map<string, StackFrame> => {
+  const serverFramesByName = new Map<string, StackFrame>();
+
+  traverseFiber(
+    rootFiber,
+    (currentFiber) => {
+      if (!hasDebugStack(currentFiber)) return false;
+
+      const ownerStack = formatOwnerStack(currentFiber._debugStack.stack);
+      if (!ownerStack) return false;
+
+      for (const frame of parseStack(ownerStack)) {
+        if (!frame.functionName || !frame.fileName) continue;
+        if (!isServerComponentUrl(frame.fileName)) continue;
+        if (serverFramesByName.has(frame.functionName)) continue;
+
+        serverFramesByName.set(frame.functionName, {
+          ...frame,
+          isServer: true,
+        });
+      }
+      return false;
+    },
+    true,
+  );
+
+  return serverFramesByName;
+};
+
+const enrichServerFrameLocations = (
+  rootFiber: Fiber,
+  frames: StackFrame[],
+): StackFrame[] => {
+  const hasUnresolvedServerFrames = frames.some(
+    (frame) => frame.isServer && !frame.fileName && frame.functionName,
+  );
+  if (!hasUnresolvedServerFrames) return frames;
+
+  const serverFramesByName = extractServerFramesFromDebugStack(rootFiber);
+  if (serverFramesByName.size === 0) return frames;
+
+  return frames.map((frame) => {
+    if (!frame.isServer || frame.fileName || !frame.functionName) return frame;
+    const resolved = serverFramesByName.get(frame.functionName);
+    if (!resolved) return frame;
+    return {
+      ...frame,
+      fileName: resolved.fileName,
+      lineNumber: resolved.lineNumber,
+      columnNumber: resolved.columnNumber,
+    };
+  });
+};
+
 const stackCache = new WeakMap<Element, Promise<StackFrame[] | null>>();
 
 const fetchStackForElement = async (
@@ -89,7 +297,15 @@ const fetchStackForElement = async (
   try {
     const fiber = getFiberFromHostInstance(element);
     if (!fiber) return null;
-    return await getOwnerStack(fiber);
+
+    const frames = await getOwnerStack(fiber);
+
+    if (checkIsNextProject()) {
+      const enrichedFrames = enrichServerFrameLocations(fiber, frames);
+      return await symbolicateServerFrames(enrichedFrames);
+    }
+
+    return frames;
   } catch {
     return null;
   }
@@ -172,7 +388,7 @@ export const getComponentDisplayName = (element: Element): string | null => {
   return null;
 };
 
-interface GetElementContextOptions {
+interface StackContextOptions {
   maxLines?: number;
 }
 
@@ -210,67 +426,85 @@ const getComponentNamesFromFiber = (
   return componentNames;
 };
 
-export const getElementContext = async (
-  element: Element,
-  options: GetElementContextOptions = {},
-): Promise<string> => {
+export const formatStackContext = (
+  stack: StackFrame[],
+  options: StackContextOptions = {},
+): string => {
   const { maxLines = 3 } = options;
-  const stack = await getStack(element);
-  const html = getHTMLPreview(element);
+  const isNextProject = checkIsNextProject();
+  const stackContext: string[] = [];
 
-  if (hasSourceFiles(stack)) {
-    const isNextProject = checkIsNextProject();
-    const stackContext: string[] = [];
+  for (const frame of stack) {
+    if (stackContext.length >= maxLines) break;
 
-    if (stack) {
-      for (const frame of stack) {
-        if (stackContext.length >= maxLines) break;
+    const hasResolvedSource = frame.fileName && isSourceFile(frame.fileName);
 
-        if (
-          frame.isServer &&
-          (!frame.functionName ||
-            checkIsSourceComponentName(frame.functionName))
-        ) {
-          stackContext.push(
-            `\n  in ${frame.functionName || "<anonymous>"} (at Server)`,
-          );
-          continue;
-        }
-        if (frame.fileName && isSourceFile(frame.fileName)) {
-          let line = "\n  in ";
-          const hasComponentName =
-            frame.functionName &&
-            checkIsSourceComponentName(frame.functionName);
-
-          if (hasComponentName) {
-            line += `${frame.functionName} (at `;
-          }
-
-          line += normalizeFileName(frame.fileName);
-
-          // HACK: bundlers like vite mess up the line number and column number
-          if (isNextProject && frame.lineNumber && frame.columnNumber) {
-            line += `:${frame.lineNumber}:${frame.columnNumber}`;
-          }
-
-          if (hasComponentName) {
-            line += `)`;
-          }
-
-          stackContext.push(line);
-        }
-      }
+    if (
+      frame.isServer &&
+      !hasResolvedSource &&
+      (!frame.functionName || checkIsSourceComponentName(frame.functionName))
+    ) {
+      stackContext.push(
+        `\n  in ${frame.functionName || "<anonymous>"} (at Server)`,
+      );
+      continue;
     }
 
-    return `${html}${stackContext.join("")}`;
+    if (hasResolvedSource) {
+      let line = "\n  in ";
+      const hasComponentName =
+        frame.functionName && checkIsSourceComponentName(frame.functionName);
+
+      if (hasComponentName) {
+        line += `${frame.functionName} (at `;
+      }
+
+      line += normalizeFileName(frame.fileName!);
+
+      // HACK: bundlers like vite mess up the line/column numbers, so we don't show them
+      if (isNextProject && frame.lineNumber && frame.columnNumber) {
+        line += `:${frame.lineNumber}:${frame.columnNumber}`;
+      }
+
+      if (hasComponentName) {
+        line += `)`;
+      }
+
+      stackContext.push(line);
+    }
+  }
+
+  return stackContext.join("");
+};
+
+export const getStackContext = async (
+  element: Element,
+  options: StackContextOptions = {},
+): Promise<string> => {
+  const maxLines = options.maxLines ?? 3;
+  const stack = await getStack(element);
+
+  if (stack && hasSourceFiles(stack)) {
+    return formatStackContext(stack, options);
   }
 
   const componentNames = getComponentNamesFromFiber(element, maxLines);
   if (componentNames.length > 0) {
-    const componentContext = componentNames
-      .map((name) => `\n  in ${name}`)
-      .join("");
-    return `${html}${componentContext}`;
+    return componentNames.map((name) => `\n  in ${name}`).join("");
+  }
+
+  return "";
+};
+
+export const getElementContext = async (
+  element: Element,
+  options: StackContextOptions = {},
+): Promise<string> => {
+  const html = getHTMLPreview(element);
+  const stackContext = await getStackContext(element, options);
+
+  if (stackContext) {
+    return `${html}${stackContext}`;
   }
 
   return getFallbackContext(element);

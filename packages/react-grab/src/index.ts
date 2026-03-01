@@ -5,18 +5,9 @@ export {
   isInstrumentationActive,
   DEFAULT_THEME,
 } from "./core/index.js";
-export { screenshotPlugin } from "./core/plugins/screenshot.js";
-export { copyHtmlPlugin } from "./core/plugins/copy-html.js";
-export { openPlugin } from "./core/plugins/open.js";
 export { commentPlugin } from "./core/plugins/comment.js";
+export { openPlugin } from "./core/plugins/open.js";
 export { generateSnippet } from "./utils/generate-snippet.js";
-export {
-  captureElementScreenshot,
-  copyImageToClipboard,
-  combineBounds,
-} from "./utils/capture-screenshot.js";
-export type { ElementBounds } from "./utils/capture-screenshot.js";
-export { isScreenshotSupported } from "./utils/is-screenshot-supported.js";
 export type {
   Options,
   ReactGrabAPI,
@@ -43,6 +34,8 @@ export type {
   ActivationMode,
   ContextMenuAction,
   ContextMenuActionContext,
+  ToolbarMenuAction,
+  PluginAction,
   ActionContext,
   ActionContextHooks,
   Plugin,

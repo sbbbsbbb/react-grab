@@ -89,16 +89,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     return false;
   };
 
-  const measureContainer = () => {
-    if (containerRef && !isTagCurrentlyHovered) {
-      const rect = containerRef.getBoundingClientRect();
-      setMeasuredWidth(rect.width);
-      setMeasuredHeight(rect.height);
-    }
-    if (panelRef) {
-      setPanelWidth(panelRef.getBoundingClientRect().width);
-    }
-  };
+  let resizeObserver: ResizeObserver | undefined;
 
   const handleTagHoverChange = (hovered: boolean) => {
     isTagCurrentlyHovered = hovered;
@@ -121,25 +112,44 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
 
     if (isEnterToExpand) {
       event.preventDefault();
-      event.stopPropagation();
       event.stopImmediatePropagation();
       props.onToggleExpand?.();
     } else if (isCtrlCToAbort) {
       event.preventDefault();
-      event.stopPropagation();
       event.stopImmediatePropagation();
       props.onAbort?.();
     }
   };
 
   onMount(() => {
-    measureContainer();
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const rect = entry.target.getBoundingClientRect();
+        if (entry.target === containerRef && !isTagCurrentlyHovered) {
+          setMeasuredWidth(rect.width);
+          setMeasuredHeight(rect.height);
+        } else if (entry.target === panelRef) {
+          setPanelWidth(rect.width);
+        }
+      }
+    });
+    if (containerRef) {
+      const rect = containerRef.getBoundingClientRect();
+      setMeasuredWidth(rect.width);
+      setMeasuredHeight(rect.height);
+      resizeObserver.observe(containerRef);
+    }
+    if (panelRef) {
+      setPanelWidth(panelRef.getBoundingClientRect().width);
+      resizeObserver.observe(panelRef);
+    }
     window.addEventListener("scroll", handleViewportChange, true);
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("keydown", handleGlobalKeyDown, { capture: true });
   });
 
   onCleanup(() => {
+    resizeObserver?.disconnect();
     window.removeEventListener("scroll", handleViewportChange, true);
     window.removeEventListener("resize", handleViewportChange);
     window.removeEventListener("keydown", handleGlobalKeyDown, {
@@ -153,36 +163,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
       lastElementIdentity = elementIdentity;
       lastValidPosition = null;
     }
-  });
-
-  const sizeAffectingSignature = createMemo(() => [
-    props.tagName,
-    props.componentName,
-    props.elementsCount,
-    props.statusText,
-    props.inputValue,
-    props.hasAgent,
-    props.isPromptMode,
-    props.isPendingDismiss,
-    props.error,
-    props.isPendingAbort,
-    props.visible,
-    props.status,
-    props.actionCycleState?.items,
-    props.actionCycleState?.activeIndex,
-    props.actionCycleState?.isVisible,
-  ]);
-
-  createEffect(() => {
-    // HACK: Trigger measurement when content that affects size changes.
-    // Solid's fine-grained reactivity means we do not re-render the entire
-    // component on every prop change. Label positioning depends on measured
-    // width/height for centering, and width/height depends on rendered content.
-    // We therefore force a re-measure whenever any size-affecting input changes.
-    // Without this, switching from a short tag to a long component name can keep
-    // stale width and offset the label incorrectly.
-    void sizeAffectingSignature();
-    queueMicrotask(measureContainer);
   });
 
   createEffect(() => {
@@ -294,8 +274,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     };
   });
 
-  const computedPosition = () => positionComputation().position;
-
   createEffect(() => {
     const result = positionComputation();
     if (result.computedArrowPosition !== null) {
@@ -310,7 +288,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
       return;
     }
 
-    event.stopPropagation();
     event.stopImmediatePropagation();
 
     const isEnterWithoutShift = event.code === "Enter" && !event.shiftKey;
@@ -347,7 +324,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
   const isActionCycleVisible = () => Boolean(props.actionCycleState?.isVisible);
 
   const handleTagClick = (event: MouseEvent) => {
-    event.stopPropagation();
     event.stopImmediatePropagation();
     if (props.filePath && props.onOpen) {
       props.onOpen();
@@ -357,7 +333,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
   const isTagClickable = () => Boolean(props.filePath && props.onOpen);
 
   const handleContainerPointerDown = (event: PointerEvent) => {
-    event.stopPropagation();
     event.stopImmediatePropagation();
     const isEditableInputVisible =
       canInteract() &&
@@ -387,16 +362,15 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
           "fixed font-sans text-[13px] antialiased filter-[drop-shadow(0px_1px_2px_#51515140)] select-none transition-opacity duration-100 ease-out",
         )}
         style={{
-          top: `${computedPosition().top}px`,
-          left: `${computedPosition().left}px`,
-          transform: `translateX(calc(-50% + ${computedPosition().edgeOffsetX}px))`,
+          top: `${positionComputation().position.top}px`,
+          left: `${positionComputation().position.left}px`,
+          transform: `translateX(calc(-50% + ${positionComputation().position.edgeOffsetX}px))`,
           "z-index": "2147483647",
           "pointer-events": shouldEnablePointerEvents() ? "auto" : "none",
           opacity: props.status === "fading" || isInternalFading() ? 0 : 1,
         }}
         onPointerDown={handleContainerPointerDown}
         onClick={(event) => {
-          event.stopPropagation();
           event.stopImmediatePropagation();
         }}
         onMouseEnter={() => props.onHoverChange?.(true)}
@@ -405,8 +379,8 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
         <Show when={!props.hideArrow}>
           <Arrow
             position={arrowPosition()}
-            leftPercent={computedPosition().arrowLeftPercent}
-            leftOffsetPx={computedPosition().arrowLeftOffset}
+            leftPercent={positionComputation().position.arrowLeftPercent}
+            leftOffsetPx={positionComputation().position.arrowLeftOffset}
             labelWidth={panelWidth()}
           />
         </Show>
@@ -423,9 +397,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
             onDismiss={props.onDismiss}
             onUndo={props.onUndo}
             onFollowUpSubmit={props.onFollowUpSubmit}
-            onCopyStateChange={() => {
-              queueMicrotask(measureContainer);
-            }}
             onFadingChange={setIsInternalFading}
             onShowContextMenu={props.onShowContextMenu}
           />

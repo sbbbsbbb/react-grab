@@ -88,6 +88,12 @@ interface HistoryDropdownInfo {
   itemCount: number;
 }
 
+interface ToolbarMenuInfo {
+  isVisible: boolean;
+  itemCount: number;
+  itemLabels: string[];
+}
+
 export interface ReactGrabPageObject {
   page: Page;
   modifierKey: "Meta" | "Control";
@@ -143,6 +149,12 @@ export interface ReactGrabPageObject {
     deltaY: number,
   ) => Promise<void>;
 
+  isToolbarMenuButtonVisible: () => Promise<boolean>;
+  clickToolbarMenuButton: () => Promise<void>;
+  isToolbarMenuVisible: () => Promise<boolean>;
+  getToolbarMenuInfo: () => Promise<ToolbarMenuInfo>;
+  clickToolbarMenuItem: (actionId: string) => Promise<void>;
+
   isHistoryButtonVisible: () => Promise<boolean>;
   hasUnreadHistoryIndicator: () => Promise<boolean>;
   clickHistoryButton: () => Promise<void>;
@@ -156,6 +168,11 @@ export interface ReactGrabPageObject {
   hoverHistoryItem: (index: number) => Promise<void>;
   hoverHistoryButton: () => Promise<void>;
   hoverCopyAllButton: () => Promise<void>;
+  clickToolbarCopyAll: () => Promise<void>;
+  isToolbarCopyAllVisible: () => Promise<boolean>;
+  isClearHistoryPromptVisible: () => Promise<boolean>;
+  confirmClearHistoryPrompt: () => Promise<void>;
+  cancelClearHistoryPrompt: () => Promise<void>;
   getHistoryDropdownPosition: () => Promise<{
     left: number;
     top: number;
@@ -629,7 +646,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         textarea.focus();
       }
     }, ATTRIBUTE_NAME);
-    await page.keyboard.type(text);
+    await page.keyboard.insertText(text);
   };
 
   const getInputValue = async (): Promise<string> => {
@@ -892,6 +909,135 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     await page.waitForTimeout(300);
   };
 
+  const isToolbarMenuButtonVisible = async (): Promise<boolean> => {
+    return page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot) return false;
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return false;
+      const menuButton = root.querySelector<HTMLElement>(
+        "[data-react-grab-toolbar-menu]",
+      );
+      if (!menuButton) return false;
+      const gridParent = menuButton.parentElement?.parentElement;
+      if (!gridParent) return false;
+      const computedStyle = window.getComputedStyle(gridParent);
+      return computedStyle.opacity !== "0";
+    }, ATTRIBUTE_NAME);
+  };
+
+  const waitForToolbarMenu = async (visible: boolean) => {
+    await page.waitForFunction(
+      ({ attrName, expectedVisible }) => {
+        const host = document.querySelector(`[${attrName}]`);
+        const shadowRoot = host?.shadowRoot;
+        if (!shadowRoot) return !expectedVisible;
+        const root = shadowRoot.querySelector(`[${attrName}]`);
+        if (!root) return !expectedVisible;
+        const menu = root.querySelector<HTMLElement>(
+          "[data-react-grab-toolbar-menu]",
+        );
+        if (!expectedVisible) {
+          const dropdown = root.querySelector<HTMLElement>(
+            "div[data-react-grab-toolbar-menu]:not([data-react-grab-toolbar])",
+          );
+          return dropdown === null;
+        }
+        if (!menu) return false;
+        const dropdowns = root.querySelectorAll<HTMLElement>(
+          "[data-react-grab-toolbar-menu]",
+        );
+        for (let i = 0; i < dropdowns.length; i++) {
+          const dropdown = dropdowns[i];
+          if (dropdown.classList.contains("fixed")) {
+            return getComputedStyle(dropdown).pointerEvents !== "none";
+          }
+        }
+        return false;
+      },
+      { attrName: ATTRIBUTE_NAME, expectedVisible: visible },
+      { timeout: 2000 },
+    );
+  };
+
+  const clickToolbarMenuButton = async () => {
+    const wasOpen = await isToolbarMenuVisible();
+    await clickShadowRootButton("[data-react-grab-toolbar-menu]");
+    await waitForToolbarMenu(!wasOpen);
+  };
+
+  const isToolbarMenuVisible = async (): Promise<boolean> => {
+    return page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot) return false;
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return false;
+      const dropdowns = root.querySelectorAll<HTMLElement>(
+        "[data-react-grab-toolbar-menu]",
+      );
+      for (let i = 0; i < dropdowns.length; i++) {
+        const dropdown = dropdowns[i];
+        if (
+          dropdown.classList.contains("fixed") &&
+          getComputedStyle(dropdown).pointerEvents !== "none"
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }, ATTRIBUTE_NAME);
+  };
+
+  const getToolbarMenuInfo = async (): Promise<ToolbarMenuInfo> => {
+    return page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot)
+        return { isVisible: false, itemCount: 0, itemLabels: [] };
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return { isVisible: false, itemCount: 0, itemLabels: [] };
+      const dropdowns = root.querySelectorAll<HTMLElement>(
+        "[data-react-grab-toolbar-menu]",
+      );
+      for (let i = 0; i < dropdowns.length; i++) {
+        const dropdown = dropdowns[i];
+        if (dropdown.classList.contains("fixed")) {
+          const items = dropdown.querySelectorAll<HTMLButtonElement>(
+            "[data-react-grab-menu-item]",
+          );
+          const itemLabels = Array.from(items).map(
+            (item) => item.textContent?.trim() ?? "",
+          );
+          return {
+            isVisible: getComputedStyle(dropdown).pointerEvents !== "none",
+            itemCount: items.length,
+            itemLabels,
+          };
+        }
+      }
+      return { isVisible: false, itemCount: 0, itemLabels: [] };
+    }, ATTRIBUTE_NAME);
+  };
+
+  const clickToolbarMenuItem = async (actionId: string) => {
+    await page.evaluate(
+      ({ attrName, itemId }) => {
+        const host = document.querySelector(`[${attrName}]`);
+        const shadowRoot = host?.shadowRoot;
+        if (!shadowRoot) return;
+        const root = shadowRoot.querySelector(`[${attrName}]`);
+        if (!root) return;
+        const button = root.querySelector<HTMLButtonElement>(
+          `[data-react-grab-menu-item="${itemId}"]`,
+        );
+        button?.click();
+      },
+      { attrName: ATTRIBUTE_NAME, itemId: actionId },
+    );
+  };
+
   const isHistoryButtonVisible = async (): Promise<boolean> => {
     return page.evaluate((attrName) => {
       const host = document.querySelector(`[${attrName}]`);
@@ -921,7 +1067,9 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         "[data-react-grab-toolbar-history]",
       );
       if (!historyButton) return false;
-      const unreadDot = historyButton.querySelector('path[fill="#404040"]');
+      const unreadDot = historyButton.querySelector(
+        "[data-react-grab-unread-indicator]",
+      );
       return unreadDot !== null;
     }, ATTRIBUTE_NAME);
   };
@@ -1136,6 +1284,79 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       );
       await page.waitForTimeout(100);
     }
+  };
+
+  const clickToolbarCopyAll = async () => {
+    await clickShadowRootButton("[data-react-grab-toolbar-copy-all]");
+  };
+
+  const isToolbarCopyAllVisible = async (): Promise<boolean> => {
+    return page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot) return false;
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return false;
+      const copyAllButton = root.querySelector<HTMLElement>(
+        "[data-react-grab-toolbar-copy-all]",
+      );
+      if (!copyAllButton) return false;
+      const gridParent = copyAllButton.parentElement?.parentElement;
+      if (!gridParent) return false;
+      const computedStyle = window.getComputedStyle(gridParent);
+      return computedStyle.opacity !== "0";
+    }, ATTRIBUTE_NAME);
+  };
+
+  const isClearHistoryPromptVisible = async (): Promise<boolean> => {
+    return page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot) return false;
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return false;
+      const prompt = root.querySelector<HTMLElement>(
+        "[data-react-grab-clear-history-prompt]",
+      );
+      if (!prompt) return false;
+      return getComputedStyle(prompt).pointerEvents !== "none";
+    }, ATTRIBUTE_NAME);
+  };
+
+  const confirmClearHistoryPrompt = async () => {
+    await page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot) return;
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return;
+      const prompt = root.querySelector(
+        "[data-react-grab-clear-history-prompt]",
+      );
+      if (!prompt) return;
+      const yesButton = prompt.querySelector<HTMLButtonElement>(
+        "[data-react-grab-discard-yes]",
+      );
+      yesButton?.click();
+    }, ATTRIBUTE_NAME);
+  };
+
+  const cancelClearHistoryPrompt = async () => {
+    await page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot) return;
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return;
+      const prompt = root.querySelector(
+        "[data-react-grab-clear-history-prompt]",
+      );
+      if (!prompt) return;
+      const noButton = prompt.querySelector<HTMLButtonElement>(
+        "[data-react-grab-discard-no]",
+      );
+      noButton?.click();
+    }, ATTRIBUTE_NAME);
   };
 
   const getHistoryDropdownPosition = async (): Promise<{
@@ -2243,6 +2464,12 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     dragToolbar,
     dragToolbarFromButton,
 
+    isToolbarMenuButtonVisible,
+    clickToolbarMenuButton,
+    isToolbarMenuVisible,
+    getToolbarMenuInfo,
+    clickToolbarMenuItem,
+
     isHistoryButtonVisible,
     hasUnreadHistoryIndicator,
     clickHistoryButton,
@@ -2256,6 +2483,11 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     hoverHistoryItem,
     hoverHistoryButton,
     hoverCopyAllButton,
+    clickToolbarCopyAll,
+    isToolbarCopyAllVisible,
+    isClearHistoryPromptVisible,
+    confirmClearHistoryPrompt,
+    cancelClearHistoryPrompt,
     getHistoryDropdownPosition,
 
     getSelectionLabelInfo,

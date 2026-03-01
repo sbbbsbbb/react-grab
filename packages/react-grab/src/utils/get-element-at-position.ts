@@ -2,7 +2,13 @@ import { isValidGrabbableElement } from "./is-valid-grabbable-element.js";
 import {
   ELEMENT_POSITION_CACHE_DISTANCE_THRESHOLD_PX,
   ELEMENT_POSITION_THROTTLE_MS,
+  POINTER_EVENTS_RESUME_DEBOUNCE_MS,
 } from "../constants.js";
+import {
+  suspendPointerEventsFreeze,
+  resumePointerEventsFreeze,
+} from "./freeze-pseudo-states.js";
+import { createElementBounds } from "./create-element-bounds.js";
 
 interface PositionCache {
   clientX: number;
@@ -12,6 +18,24 @@ interface PositionCache {
 }
 
 let cache: PositionCache | null = null;
+let resumeTimerId: ReturnType<typeof setTimeout> | null = null;
+
+const scheduleResume = (): void => {
+  if (resumeTimerId !== null) {
+    clearTimeout(resumeTimerId);
+  }
+  resumeTimerId = setTimeout(() => {
+    resumeTimerId = null;
+    resumePointerEventsFreeze();
+  }, POINTER_EVENTS_RESUME_DEBOUNCE_MS);
+};
+
+const cancelScheduledResume = (): void => {
+  if (resumeTimerId !== null) {
+    clearTimeout(resumeTimerId);
+    resumeTimerId = null;
+  }
+};
 
 const isWithinThreshold = (
   x1: number,
@@ -30,7 +54,13 @@ const isWithinThreshold = (
 export const getElementsAtPoint = (
   clientX: number,
   clientY: number,
-): Element[] => document.elementsFromPoint(clientX, clientY);
+): Element[] => {
+  cancelScheduledResume();
+  suspendPointerEventsFreeze();
+  const elements = document.elementsFromPoint(clientX, clientY);
+  scheduleResume();
+  return elements;
+};
 
 export const getElementAtPosition = (
   clientX: number,
@@ -53,20 +83,39 @@ export const getElementAtPosition = (
     }
   }
 
-  const elementsAtPoint = getElementsAtPoint(clientX, clientY);
+  cancelScheduledResume();
+  suspendPointerEventsFreeze();
 
   let result: Element | null = null;
-  for (const candidateElement of elementsAtPoint) {
-    if (isValidGrabbableElement(candidateElement)) {
-      result = candidateElement;
-      break;
+
+  const topElement = document.elementFromPoint(clientX, clientY);
+  if (topElement && isValidGrabbableElement(topElement)) {
+    result = topElement;
+  } else {
+    const elementsAtPoint = document.elementsFromPoint(clientX, clientY);
+    for (const candidateElement of elementsAtPoint) {
+      if (
+        candidateElement !== topElement &&
+        isValidGrabbableElement(candidateElement)
+      ) {
+        result = candidateElement;
+        break;
+      }
     }
   }
+
+  if (result) {
+    createElementBounds(result);
+  }
+
+  scheduleResume();
 
   cache = { clientX, clientY, element: result, timestamp: now };
   return result;
 };
 
 export const clearElementPositionCache = (): void => {
+  cancelScheduledResume();
+  resumePointerEventsFreeze();
   cache = null;
 };

@@ -6,10 +6,7 @@ import { SelectionLabel } from "react-grab/src/components/selection-label/index.
 import { ContextMenu } from "react-grab/src/components/context-menu.js";
 import { ToolbarContent } from "react-grab/src/components/toolbar/toolbar-content.js";
 import { HistoryDropdown } from "react-grab/src/components/history-dropdown.js";
-import {
-  IconInbox,
-  IconInboxUnread,
-} from "react-grab/src/components/icons/icon-inbox.js";
+import { IconClock } from "react-grab/src/components/icons/icon-clock.js";
 import type {
   OverlayBounds,
   SelectionLabelStatus,
@@ -45,7 +42,6 @@ interface DesignSystemStateProps {
   hasOnRetry?: boolean;
   hasOnAcknowledge?: boolean;
   isToolbarActive?: boolean;
-  isToolbarCommentMode?: boolean;
   isToolbarEnabled?: boolean;
   isToolbarCollapsed?: boolean;
   toolbarSnapEdge?: "top" | "bottom" | "left" | "right";
@@ -850,17 +846,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
     props: {
       isToolbarActive: true,
       isToolbarEnabled: false,
-    },
-  },
-  {
-    id: "toolbar-comment-mode",
-    label: "Toolbar (Comment Mode)",
-    description: "Comment selection mode active",
-    component: "toolbar",
-    props: {
-      isToolbarActive: true,
-      isToolbarCommentMode: true,
-      isToolbarEnabled: true,
     },
   },
   {
@@ -2709,12 +2694,6 @@ const StateCard = (props: StateCardProps) => {
                   shortcut: "C",
                   onAction: () => {},
                 },
-                {
-                  id: "screenshot",
-                  label: "Screenshot",
-                  shortcut: "S",
-                  onAction: () => {},
-                },
                 { id: "copy-html", label: "Copy HTML", onAction: () => {} },
                 {
                   id: "open",
@@ -2738,7 +2717,6 @@ const StateCard = (props: StateCardProps) => {
           <Show when={props.state.component === "toolbar"}>
             <ToolbarContent
               isActive={currentProps().isToolbarActive ?? false}
-              isCommentMode={currentProps().isToolbarCommentMode ?? false}
               enabled={currentProps().isToolbarEnabled ?? true}
               isCollapsed={currentProps().isToolbarCollapsed}
               snapEdge={currentProps().toolbarSnapEdge}
@@ -2752,20 +2730,10 @@ const StateCard = (props: StateCardProps) => {
                   <div class="grid grid-cols-[1fr] opacity-100 transition-all duration-150 ease-out">
                     <div class="relative overflow-visible min-w-0">
                       <button class="contain-layout flex items-center justify-center cursor-pointer interactive-scale touch-hitbox mr-1.5">
-                        <Show
-                          when={currentProps().toolbarHasUnreadHistoryItems}
-                          fallback={
-                            <IconInbox
-                              size={14}
-                              class="text-[#B3B3B3] transition-colors"
-                            />
-                          }
-                        >
-                          <IconInboxUnread
-                            size={14}
-                            class="text-[#B3B3B3] transition-colors"
-                          />
-                        </Show>
+                        <IconClock
+                          size={14}
+                          class="text-[#B3B3B3] transition-colors"
+                        />
                       </button>
                     </div>
                   </div>
@@ -2791,7 +2759,7 @@ const StateCard = (props: StateCardProps) => {
                     <div class="grid grid-cols-[1fr] opacity-100 transition-all duration-150 ease-out">
                       <div class="relative overflow-visible min-w-0">
                         <button class="contain-layout flex items-center justify-center cursor-pointer interactive-scale touch-hitbox mr-1.5">
-                          <IconInbox
+                          <IconClock
                             size={14}
                             class="text-[#B3B3B3] transition-colors"
                           />

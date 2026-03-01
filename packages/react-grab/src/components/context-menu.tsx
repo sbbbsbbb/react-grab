@@ -21,6 +21,11 @@ import { formatShortcut } from "../utils/format-shortcut.js";
 import { getTagDisplay } from "../utils/get-tag-display.js";
 import { resolveActionEnabled } from "../utils/resolve-action-enabled.js";
 import { isEventFromOverlay } from "../utils/is-event-from-overlay.js";
+import {
+  nativeCancelAnimationFrame,
+  nativeRequestAnimationFrame,
+} from "../utils/native-raf.js";
+import { createMenuHighlight } from "../utils/create-menu-highlight.js";
 
 interface ContextMenuProps {
   position: { x: number; y: number } | null;
@@ -43,6 +48,12 @@ interface MenuItem {
 
 export const ContextMenu: Component<ContextMenuProps> = (props) => {
   let containerRef: HTMLDivElement | undefined;
+  const {
+    containerRef: highlightContainerRef,
+    highlightRef,
+    updateHighlight,
+    clearHighlight,
+  } = createMenuHighlight();
 
   const [measuredWidth, setMeasuredWidth] = createSignal(0);
   const [measuredHeight, setMeasuredHeight] = createSignal(0);
@@ -65,7 +76,7 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
 
   createEffect(() => {
     if (isVisible()) {
-      requestAnimationFrame(measureContainer);
+      nativeRequestAnimationFrame(measureContainer);
     }
   });
 
@@ -85,8 +96,17 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
     }
 
     const cursorX = clickPosition.x ?? bounds.x + bounds.width / 2;
-    const positionLeft = cursorX - labelWidth / 2;
-    const arrowLeft = labelWidth / 2;
+    const positionLeft = Math.max(
+      LABEL_GAP_PX,
+      Math.min(
+        cursorX - labelWidth / 2,
+        window.innerWidth - labelWidth - LABEL_GAP_PX,
+      ),
+    );
+    const arrowLeft = Math.max(
+      ARROW_HEIGHT_PX,
+      Math.min(cursorX - positionLeft, labelWidth - ARROW_HEIGHT_PX),
+    );
 
     const positionBelow =
       bounds.y + bounds.height + ARROW_HEIGHT_PX + LABEL_GAP_PX;
@@ -97,8 +117,20 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
     const hasSpaceAbove = positionAbove >= 0;
 
     const shouldFlipAbove = wouldOverflowBottom && hasSpaceAbove;
-    const positionTop = shouldFlipAbove ? positionAbove : positionBelow;
-    const arrowPosition: "top" | "bottom" = shouldFlipAbove ? "top" : "bottom";
+    let positionTop = shouldFlipAbove ? positionAbove : positionBelow;
+    let arrowPosition: "top" | "bottom" = shouldFlipAbove ? "top" : "bottom";
+
+    if (wouldOverflowBottom && !hasSpaceAbove) {
+      const cursorY = clickPosition.y ?? bounds.y + bounds.height / 2;
+      positionTop = Math.max(
+        LABEL_GAP_PX,
+        Math.min(
+          cursorY + LABEL_GAP_PX,
+          window.innerHeight - labelHeight - LABEL_GAP_PX,
+        ),
+      );
+      arrowPosition = "top";
+    }
 
     return { left: positionLeft, top: positionTop, arrowLeft, arrowPosition };
   };
@@ -200,7 +232,7 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
     };
 
     // HACK: Delay mousedown/touchstart listener to avoid catching the triggering right-click
-    const frameId = requestAnimationFrame(() => {
+    const frameId = nativeRequestAnimationFrame(() => {
       window.addEventListener("mousedown", handleClickOutside, {
         capture: true,
       });
@@ -211,7 +243,7 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
     window.addEventListener("keydown", handleKeyDown, { capture: true });
 
     onCleanup(() => {
-      cancelAnimationFrame(frameId);
+      nativeCancelAnimationFrame(frameId);
       window.removeEventListener("mousedown", handleClickOutside, {
         capture: true,
       });
@@ -228,7 +260,7 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
         ref={containerRef}
         data-react-grab-ignore-events
         data-react-grab-context-menu
-        class="fixed font-sans text-[13px] antialiased filter-[drop-shadow(0px_1px_2px_#51515140)] select-none transition-opacity duration-150 ease-out"
+        class="fixed font-sans text-[13px] antialiased filter-[drop-shadow(0px_1px_2px_#51515140)] select-none"
         style={{
           top: `${computedPosition().top}px`,
           left: `${computedPosition().left}px`,
@@ -273,15 +305,25 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
             />
           </div>
           <BottomSection>
-            <div class="flex flex-col w-[calc(100%+16px)] -mx-2 -my-1.5">
+            <div ref={highlightContainerRef} class="relative flex flex-col w-[calc(100%+16px)] -mx-2 -my-1.5">
+              <div
+                ref={highlightRef}
+                class="pointer-events-none absolute bg-black/5 opacity-0 transition-[top,left,width,height,opacity] duration-75 ease-out"
+              />
               <For each={menuItems()}>
                 {(item) => (
                   <button
                     data-react-grab-ignore-events
                     data-react-grab-menu-item={item.label.toLowerCase()}
-                    class="contain-layout flex items-center justify-between w-full px-2 py-1 cursor-pointer transition-colors hover:bg-black/5 text-left border-none bg-transparent disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent"
+                    class="relative z-1 contain-layout flex items-center justify-between w-full px-2 py-1 cursor-pointer text-left border-none bg-transparent disabled:opacity-40 disabled:cursor-default"
                     disabled={!item.enabled}
                     onPointerDown={(event) => event.stopPropagation()}
+                    onPointerEnter={(event) => {
+                      if (item.enabled) {
+                        updateHighlight(event.currentTarget);
+                      }
+                    }}
+                    onPointerLeave={clearHighlight}
                     onClick={(event) => handleAction(item, event)}
                   >
                     <span class="text-[13px] leading-4 font-sans font-medium text-black">
