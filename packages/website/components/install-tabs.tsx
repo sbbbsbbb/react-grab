@@ -26,6 +26,7 @@ interface InstallTab {
   id: string;
   label: string;
   description: React.ReactNode;
+  variant: "code" | "command" | "prompt";
   lang?: "tsx" | "bash";
   getCode: (hotkey: RecordedHotkey | null) => string;
   getChangedLines: (hotkey: RecordedHotkey | null) => number[];
@@ -40,12 +41,26 @@ const installTabsData: InstallTab[] = [
     id: "cli",
     label: "CLI",
     description: "Run this command at your project root",
+    variant: "command",
     lang: "bash",
     getCode: (hotkey) => {
       if (hotkey) {
         return `npx -y grab@latest init --key "${hotkeyToString(hotkey)}"`;
       }
       return `npx -y grab@latest init`;
+    },
+    getChangedLines: () => [],
+  },
+  {
+    id: "prompt",
+    label: "Prompt",
+    description: "Paste this prompt in your coding agent's chat",
+    variant: "prompt",
+    getCode: (hotkey) => {
+      const command = hotkey
+        ? `npx -y grab@latest init --key "${hotkeyToString(hotkey)}"`
+        : "npx -y grab@latest init";
+      return `Find the React project in this workspace (look for package.json with a react dependency). If there are multiple, ask me which one. Then run \`${command}\` in that project's root directory to install React Grab.`;
     },
     getChangedLines: () => [],
   },
@@ -57,6 +72,7 @@ const installTabsData: InstallTab[] = [
         Add this inside of your <InlineCode>app/layout.tsx</InlineCode>
       </>
     ),
+    variant: "code",
     getCode: (hotkey) => {
       const dataOptionsAttr = hotkey
         ? `\n            data-options='{"activationKey":"${hotkeyToString(
@@ -93,6 +109,7 @@ export default function RootLayout({ children }) {
         Add this into your <InlineCode>pages/_document.tsx</InlineCode>
       </>
     ),
+    variant: "code",
     getCode: (hotkey) => {
       const dataOptionsAttr = hotkey
         ? `\n            data-options='{"activationKey":"${hotkeyToString(
@@ -134,6 +151,7 @@ export default function Document() {
         development
       </>
     ),
+    variant: "code",
     getCode: (hotkey) => {
       if (hotkey) {
         return `<!doctype html>
@@ -183,6 +201,7 @@ export default function Document() {
         the top of your main entry file
       </>
     ),
+    variant: "code",
     getCode: (hotkey) => {
       if (hotkey) {
         return `import React from "react";
@@ -231,6 +250,7 @@ root.render(
         Add this inside your <InlineCode>src/routes/__root.tsx</InlineCode>
       </>
     ),
+    variant: "code",
     getCode: (hotkey) => {
       if (hotkey) {
         return `import { useEffect } from "react";
@@ -274,6 +294,12 @@ function RootComponent() {
   },
 ];
 
+const HEADING_TEXT_BY_VARIANT: Record<InstallTab["variant"], string> = {
+  prompt: "Copy this to your agent:",
+  command: "Run this command to get started:",
+  code: "It takes 1 script tag to get started:",
+};
+
 interface InstallTabsProps {
   showHeading?: boolean;
   showAgentNote?: boolean;
@@ -308,11 +334,14 @@ export const InstallTabs = ({
       const results = await Promise.all(
         installTabsData.map(async (tab) => ({
           id: tab.id,
-          html: await highlightCode({
-            code: tab.getCode(hotkey),
-            lang: tab.lang ?? "tsx",
-            changedLines: tab.getChangedLines(hotkey),
-          }),
+          html:
+            tab.variant === "prompt"
+              ? ""
+              : await highlightCode({
+                  code: tab.getCode(hotkey),
+                  lang: tab.lang ?? "tsx",
+                  changedLines: tab.getChangedLines(hotkey),
+                }),
         })),
       );
       const codes: Record<string, string> = {};
@@ -355,17 +384,14 @@ export const InstallTabs = ({
     return null;
   }
 
-  const headingText =
-    activeTabId === "cli"
-      ? "Run this command to get started:"
-      : "It takes 1 script tag to get started:";
+  const headingText = HEADING_TEXT_BY_VARIANT[activeTab.variant];
 
   return (
     <div>
       {showHeading && (
         <span className="hidden sm:inline text-white">
           {headingText}
-          {activeTabId === "cli" && (
+          {activeTab.variant !== "code" && (
             <button
               type="button"
               onClick={() => setActiveTabId("next-app")}
@@ -400,13 +426,17 @@ export const InstallTabs = ({
         </div>
         <div className="bg-black/60 relative">
           <div className="relative">
-            {activeTabId === "cli" ? (
+            {activeTab.variant !== "code" ? (
               <button
                 type="button"
                 onClick={handleCopyClick}
                 className="group flex w-full items-center justify-between gap-4 px-4 py-6 transition-colors hover:bg-white/5"
               >
-                {highlightedCode ? (
+                {activeTab.variant === "prompt" ? (
+                  <p className="text-left text-base leading-relaxed text-white/80 text-pretty">
+                    {activeCode}
+                  </p>
+                ) : highlightedCode ? (
                   <div
                     className="overflow-x-auto font-mono text-base leading-relaxed highlighted-code"
                     dangerouslySetInnerHTML={{ __html: highlightedCode }}
@@ -444,12 +474,12 @@ export const InstallTabs = ({
           </div>
         </div>
       </div>
-      {activeTabId !== "cli" && (
+      {activeTab.variant === "code" && (
         <span className="mt-4 block text-sm text-white/50 sm:text-base">
           {activeTab.description}
         </span>
       )}
-      {showAgentNote && activeTabId !== "cli" && (
+      {showAgentNote && activeTab.variant === "code" && (
         <span className="mt-2 block text-sm text-white/50 sm:text-base">
           Want to connect directly to your coding agent?{" "}
           <a href="/blog/agent" className="underline hover:text-white/70">
