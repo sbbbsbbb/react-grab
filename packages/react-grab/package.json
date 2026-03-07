@@ -1,6 +1,6 @@
 {
   "name": "react-grab",
-  "version": "0.1.15",
+  "version": "0.1.26",
   "description": "Select context for coding agents directly from your website",
   "keywords": [
     "agent",
@@ -22,7 +22,11 @@
     "type": "git",
     "url": "git+https://github.com/aidenybai/react-grab.git"
   },
+  "bin": {
+    "react-grab": "./bin/cli.js"
+  },
   "files": [
+    "bin",
     "dist",
     "package.json",
     "README.md",
@@ -55,14 +59,14 @@
         "default": "./dist/core/index.cjs"
       }
     },
-    "./react": {
+    "./primitives": {
       "import": {
-        "types": "./dist/react.d.ts",
-        "default": "./dist/react.js"
+        "types": "./dist/primitives.d.ts",
+        "default": "./dist/primitives.js"
       },
       "require": {
-        "types": "./dist/react.d.cts",
-        "default": "./dist/react.cjs"
+        "types": "./dist/primitives.d.cts",
+        "default": "./dist/primitives.cjs"
       }
     },
     "./src/*": "./src/*",
@@ -93,7 +97,9 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
-    "bippy": "^0.5.30",
+    "@medv/finder": "^4.0.2",
+    "@react-grab/cli": "workspace:*",
+    "bippy": "^0.5.32",
     "solid-js": "^1.9.10"
   },
   "devDependencies": {

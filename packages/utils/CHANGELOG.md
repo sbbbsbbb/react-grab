@@ -1,5 +1,71 @@
 # @react-grab/utils
 
+## 0.1.26
+
+### Patch Changes
+
+- fix: minor tweaks
+
+## 0.1.25
+
+### Patch Changes
+
+- fix: primtiives
+
+## 0.1.24
+
+### Patch Changes
+
+- primitives
+
+## 0.1.23
+
+### Patch Changes
+
+- fix: npx command
+
+## 0.1.22
+
+### Patch Changes
+
+- fix: freezing
+
+## 0.1.21
+
+### Patch Changes
+
+- fix: up and down selection
+
+## 0.1.20
+
+### Patch Changes
+
+- fix: selection performacne
+
+## 0.1.19
+
+### Patch Changes
+
+- fix: gsap
+
+## 0.1.18
+
+### Patch Changes
+
+- fix: minor issues
+
+## 0.1.17
+
+### Patch Changes
+
+- fix: mcp
+
+## 0.1.16
+
+### Patch Changes
+
+- fix: environment detection
+
 ## 0.1.15
 
 ### Patch Changes

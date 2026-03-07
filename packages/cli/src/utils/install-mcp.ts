@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import * as jsonc from "jsonc-parser";
+import * as TOML from "smol-toml";
 import { highlighter } from "./highlighter.js";
 import { logger } from "./logger.js";
 import { prompts } from "./prompts.js";
@@ -25,6 +27,9 @@ interface InstallResult {
   error?: string;
 }
 
+const getXdgConfigHome = (): string =>
+  process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+
 const getBaseDir = (): string => {
   const homeDir = os.homedir();
   if (process.platform === "win32") {
@@ -33,17 +38,14 @@ const getBaseDir = (): string => {
   if (process.platform === "darwin") {
     return path.join(homeDir, "Library", "Application Support");
   }
-  return process.env.XDG_CONFIG_HOME || path.join(homeDir, ".config");
+  return getXdgConfigHome();
 };
 
 const getZedConfigPath = (): string => {
-  const homeDir = os.homedir();
   if (process.platform === "win32") {
-    const appData =
-      process.env.APPDATA || path.join(homeDir, "AppData", "Roaming");
-    return path.join(appData, "Zed", "settings.json");
+    return path.join(getBaseDir(), "Zed", "settings.json");
   }
-  return path.join(homeDir, ".config", "zed", "settings.json");
+  return path.join(os.homedir(), ".config", "zed", "settings.json");
 };
 
 const getClients = (): ClientDefinition[] => {
@@ -57,6 +59,23 @@ const getClients = (): ClientDefinition[] => {
 
   return [
     {
+      name: "Claude Code",
+      configPath: path.join(homeDir, ".claude.json"),
+      configKey: "mcpServers",
+      format: "json",
+      serverConfig: stdioConfig,
+    },
+    {
+      name: "Codex",
+      configPath: path.join(
+        process.env.CODEX_HOME || path.join(homeDir, ".codex"),
+        "config.toml",
+      ),
+      configKey: "mcp_servers",
+      format: "toml",
+      serverConfig: stdioConfig,
+    },
+    {
       name: "Cursor",
       configPath: path.join(homeDir, ".cursor", "mcp.json"),
       configKey: "mcpServers",
@@ -64,18 +83,21 @@ const getClients = (): ClientDefinition[] => {
       serverConfig: stdioConfig,
     },
     {
+      name: "OpenCode",
+      configPath: path.join(getXdgConfigHome(), "opencode", "opencode.json"),
+      configKey: "mcp",
+      format: "json",
+      serverConfig: {
+        type: "local",
+        command: ["npx", "-y", PACKAGE_NAME, "--stdio"],
+      },
+    },
+    {
       name: "VS Code",
       configPath: path.join(baseDir, "Code", "User", "mcp.json"),
       configKey: "servers",
       format: "json",
       serverConfig: { type: "stdio", ...stdioConfig },
-    },
-    {
-      name: "Claude Code",
-      configPath: path.join(homeDir, ".claude.json"),
-      configKey: "mcpServers",
-      format: "json",
-      serverConfig: stdioConfig,
     },
     {
       name: "Amp",
@@ -92,13 +114,10 @@ const getClients = (): ClientDefinition[] => {
       serverConfig: { type: "stdio", ...stdioConfig },
     },
     {
-      name: "Codex",
-      configPath: path.join(
-        process.env.CODEX_HOME || path.join(homeDir, ".codex"),
-        "config.toml",
-      ),
-      configKey: "mcp_servers",
-      format: "toml",
+      name: "Windsurf",
+      configPath: path.join(homeDir, ".codeium", "windsurf", "mcp_config.json"),
+      configKey: "mcpServers",
+      format: "json",
       serverConfig: stdioConfig,
     },
     {
@@ -108,161 +127,67 @@ const getClients = (): ClientDefinition[] => {
       format: "json",
       serverConfig: { source: "custom", ...stdioConfig, env: {} },
     },
-    {
-      name: "Windsurf",
-      configPath: path.join(homeDir, ".codeium", "windsurf", "mcp_config.json"),
-      configKey: "mcpServers",
-      format: "json",
-      serverConfig: stdioConfig,
-    },
   ];
 };
 
-export const ensureDirectory = (filePath: string): void => {
+const ensureDirectory = (filePath: string): void => {
   const directory = path.dirname(filePath);
   if (!fs.existsSync(directory)) {
     fs.mkdirSync(directory, { recursive: true });
   }
 };
 
-export const indentJson = (json: string, baseIndent: string): string =>
-  json
-    .split("\n")
-    .map((line, index) => (index === 0 ? line : baseIndent + line))
-    .join("\n");
+const JSONC_FORMAT_OPTIONS: jsonc.FormattingOptions = {
+  tabSize: 2,
+  insertSpaces: true,
+};
 
-export const insertIntoJsonc = (
+export const upsertIntoJsonc = (
   filePath: string,
   content: string,
   configKey: string,
   serverName: string,
   serverConfig: Record<string, unknown>,
 ): void => {
-  if (content.includes(`"${serverName}"`)) return;
-
-  const serverJson = indentJson(
-    JSON.stringify(serverConfig, null, 2),
-    "      ",
-  );
-  const escapedConfigKey = configKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const keyPattern = new RegExp(`"${escapedConfigKey}"\\s*:\\s*\\{`);
-  const keyMatch = keyPattern.exec(content);
-
-  if (keyMatch) {
-    const insertPosition = keyMatch.index + keyMatch[0].length;
-    const entry = `\n    "${serverName}": ${serverJson},`;
-    fs.writeFileSync(
-      filePath,
-      content.slice(0, insertPosition) + entry + content.slice(insertPosition),
-    );
-    return;
-  }
-
-  const lastBrace = content.lastIndexOf("}");
-  if (lastBrace === -1) return;
-
-  const beforeBrace = content.slice(0, lastBrace).trimEnd();
-  const withoutComments = beforeBrace.replace(/\/\/.*$/, "").trimEnd();
-  const lastChar = withoutComments[withoutComments.length - 1];
-  const needsComma =
-    lastChar !== undefined && lastChar !== "{" && lastChar !== ",";
-
-  const section = `${needsComma ? "," : ""}\n  "${configKey}": {\n    "${serverName}": ${serverJson}\n  }`;
-  fs.writeFileSync(filePath, beforeBrace + section + "\n}\n");
+  const edits = jsonc.modify(content, [configKey, serverName], serverConfig, {
+    formattingOptions: JSONC_FORMAT_OPTIONS,
+  });
+  fs.writeFileSync(filePath, jsonc.applyEdits(content, edits));
 };
 
 export const installJsonClient = (client: ClientDefinition): void => {
   ensureDirectory(client.configPath);
 
-  if (!fs.existsSync(client.configPath)) {
-    const config = {
-      [client.configKey]: { [SERVER_NAME]: client.serverConfig },
-    };
-    fs.writeFileSync(client.configPath, JSON.stringify(config, null, 2) + "\n");
-    return;
-  }
+  const content = fs.existsSync(client.configPath)
+    ? fs.readFileSync(client.configPath, "utf8")
+    : "{}";
 
-  const content = fs.readFileSync(client.configPath, "utf8");
-
-  try {
-    const config = JSON.parse(content) as Record<string, unknown>;
-    const servers = (config[client.configKey] as Record<string, unknown>) ?? {};
-    servers[SERVER_NAME] = client.serverConfig;
-    config[client.configKey] = servers;
-    fs.writeFileSync(client.configPath, JSON.stringify(config, null, 2) + "\n");
-  } catch {
-    insertIntoJsonc(
-      client.configPath,
-      content,
-      client.configKey,
-      SERVER_NAME,
-      client.serverConfig,
-    );
-  }
-};
-
-export const buildTomlSection = (
-  configKey: string,
-  serverConfig: Record<string, unknown>,
-): string => {
-  const lines = [`[${configKey}.${SERVER_NAME}]`];
-  for (const [key, value] of Object.entries(serverConfig)) {
-    if (typeof value === "string") {
-      lines.push(`${key} = "${value}"`);
-    } else if (Array.isArray(value)) {
-      const items = value.map((item) => `"${item}"`).join(", ");
-      lines.push(`${key} = [${items}]`);
-    }
-  }
-  return lines.join("\n");
+  upsertIntoJsonc(
+    client.configPath,
+    content,
+    client.configKey,
+    SERVER_NAME,
+    client.serverConfig,
+  );
 };
 
 export const installTomlClient = (client: ClientDefinition): void => {
   ensureDirectory(client.configPath);
 
-  const sectionHeader = `[${client.configKey}.${SERVER_NAME}]`;
-  const newSection = buildTomlSection(client.configKey, client.serverConfig);
+  const existingConfig: Record<string, unknown> = fs.existsSync(
+    client.configPath,
+  )
+    ? TOML.parse(fs.readFileSync(client.configPath, "utf8"))
+    : {};
 
-  if (!fs.existsSync(client.configPath)) {
-    fs.writeFileSync(client.configPath, newSection + "\n");
-    return;
-  }
+  const serverSection = (existingConfig[client.configKey] ?? {}) as Record<
+    string,
+    unknown
+  >;
+  serverSection[SERVER_NAME] = client.serverConfig;
+  existingConfig[client.configKey] = serverSection;
 
-  const content = fs.readFileSync(client.configPath, "utf8");
-
-  if (!content.includes(sectionHeader)) {
-    fs.writeFileSync(
-      client.configPath,
-      content.trimEnd() + "\n\n" + newSection + "\n",
-    );
-    return;
-  }
-
-  const lines = content.split("\n");
-  const resultLines: string[] = [];
-  let isInsideOurSection = false;
-  let didInsertReplacement = false;
-
-  for (const line of lines) {
-    if (line.trim() === sectionHeader) {
-      isInsideOurSection = true;
-      if (!didInsertReplacement) {
-        resultLines.push(newSection);
-        didInsertReplacement = true;
-      }
-      continue;
-    }
-
-    if (isInsideOurSection && line.startsWith("[")) {
-      isInsideOurSection = false;
-    }
-
-    if (!isInsideOurSection) {
-      resultLines.push(line);
-    }
-  }
-
-  fs.writeFileSync(client.configPath, resultLines.join("\n"));
+  fs.writeFileSync(client.configPath, TOML.stringify(existingConfig));
 };
 
 export const getMcpClientNames = (): string[] =>
@@ -303,9 +228,8 @@ export const installMcpServers = (
   }
 
   const successCount = results.filter((result) => result.success).length;
-  const failedCount = results.length - successCount;
 
-  if (failedCount > 0) {
+  if (successCount < results.length) {
     installSpinner.warn(
       `Installed to ${successCount}/${results.length} agents.`,
     );

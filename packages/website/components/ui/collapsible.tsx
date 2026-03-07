@@ -38,17 +38,18 @@ export const Collapsible = ({
   return (
     <div>
       <button
+        type="button"
         onClick={handleToggle}
-        className="w-full text-left group relative"
+        className="w-full text-left group relative focus:outline-none"
       >
-        <div className="flex items-center text-[#818181]">
+        <div className="flex items-center text-muted-foreground">
           {header}
           {isExpanded ? (
             <span className="ml-2 opacity-50">
               <ChevronDown className="w-3 h-3" />
             </span>
           ) : (
-            <span className="ml-2 opacity-0 group-hover:opacity-50 transition-opacity">
+            <span className="ml-2 opacity-0">
               <ChevronRight className="w-3 h-3" />
             </span>
           )}

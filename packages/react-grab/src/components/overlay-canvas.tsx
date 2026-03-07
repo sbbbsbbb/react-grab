@@ -20,6 +20,10 @@ import {
   OVERLAY_BORDER_COLOR_DEFAULT,
   OVERLAY_FILL_COLOR_DEFAULT,
 } from "../constants.js";
+import {
+  nativeCancelAnimationFrame,
+  nativeRequestAnimationFrame,
+} from "../utils/native-raf.js";
 
 const LAYER_STYLES = {
   drag: {
@@ -69,8 +73,6 @@ interface Position {
 
 export interface OverlayCanvasProps {
   crosshairVisible?: boolean;
-  mouseX?: number;
-  mouseY?: number;
 
   selectionVisible?: boolean;
   selectionBounds?: OverlayBounds;
@@ -520,7 +522,7 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
     compositeAllLayers();
 
     if (shouldContinueAnimating) {
-      animationFrameId = requestAnimationFrame(runAnimationFrame);
+      animationFrameId = nativeRequestAnimationFrame(runAnimationFrame);
     } else {
       animationFrameId = null;
     }
@@ -528,27 +530,13 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
 
   const scheduleAnimationFrame = () => {
     if (animationFrameId !== null) return;
-    animationFrameId = requestAnimationFrame(runAnimationFrame);
+    animationFrameId = nativeRequestAnimationFrame(runAnimationFrame);
   };
 
   const handleWindowResize = () => {
     initializeCanvas();
     scheduleAnimationFrame();
   };
-
-  createEffect(
-    on(
-      () => [props.mouseX, props.mouseY] as const,
-      ([mouseX, mouseY]) => {
-        const targetX = mouseX ?? 0;
-        const targetY = mouseY ?? 0;
-
-        crosshairCurrentPosition.x = targetX;
-        crosshairCurrentPosition.y = targetY;
-        scheduleAnimationFrame();
-      },
-    ),
-  );
 
   createEffect(
     on(
@@ -759,6 +747,16 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
     initializeCanvas();
     scheduleAnimationFrame();
 
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!event.isPrimary) return;
+      crosshairCurrentPosition.x = event.clientX;
+      crosshairCurrentPosition.y = event.clientY;
+      scheduleAnimationFrame();
+    };
+
+    window.addEventListener("pointermove", handlePointerMove, {
+      passive: true,
+    });
     window.addEventListener("resize", handleWindowResize);
 
     let currentDprMediaQuery: MediaQueryList | null = null;
@@ -793,6 +791,7 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
     setupDprMediaQuery();
 
     onCleanup(() => {
+      window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("resize", handleWindowResize);
       if (currentDprMediaQuery) {
         currentDprMediaQuery.removeEventListener(
@@ -801,7 +800,7 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
         );
       }
       if (animationFrameId !== null) {
-        cancelAnimationFrame(animationFrameId);
+        nativeCancelAnimationFrame(animationFrameId);
       }
     });
   });
