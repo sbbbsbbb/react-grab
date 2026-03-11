@@ -3,13 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  buildTomlSection,
   type ClientDefinition,
-  indentJson,
-  insertIntoJsonc,
+  upsertIntoJsonc,
   installJsonClient,
   installTomlClient,
   getMcpClientNames,
+  getOpenCodeConfigPath,
 } from "../src/utils/install-mcp.js";
 
 let tempDir: string;
@@ -45,54 +44,19 @@ const makeTomlClient = (
 });
 
 describe("getMcpClientNames", () => {
-  it("should return all 8 client names", () => {
+  it("should return all 9 client names", () => {
     const names = getMcpClientNames();
 
-    expect(names).toHaveLength(8);
-    expect(names).toContain("Cursor");
-    expect(names).toContain("VS Code");
+    expect(names).toHaveLength(9);
     expect(names).toContain("Claude Code");
+    expect(names).toContain("Codex");
+    expect(names).toContain("Cursor");
+    expect(names).toContain("OpenCode");
+    expect(names).toContain("VS Code");
     expect(names).toContain("Amp");
     expect(names).toContain("Droid");
-    expect(names).toContain("Codex");
-    expect(names).toContain("Zed");
     expect(names).toContain("Windsurf");
-  });
-});
-
-describe("indentJson", () => {
-  it("should not indent the first line", () => {
-    const result = indentJson('{\n  "key": "value"\n}', "    ");
-
-    expect(result).toBe('{\n      "key": "value"\n    }');
-  });
-
-  it("should handle single-line json", () => {
-    const result = indentJson('"value"', "  ");
-
-    expect(result).toBe('"value"');
-  });
-});
-
-describe("buildTomlSection", () => {
-  it("should build a valid TOML section with string and array values", () => {
-    const result = buildTomlSection("mcp_servers", {
-      command: "npx",
-      args: ["-y", "@react-grab/mcp", "--stdio"],
-    });
-
-    expect(result).toBe(
-      '[mcp_servers.react-grab-mcp]\ncommand = "npx"\nargs = ["-y", "@react-grab/mcp", "--stdio"]',
-    );
-  });
-
-  it("should skip non-string non-array values", () => {
-    const result = buildTomlSection("mcp_servers", {
-      command: "npx",
-      enabled: true,
-    });
-
-    expect(result).toBe('[mcp_servers.react-grab-mcp]\ncommand = "npx"');
+    expect(names).toContain("Zed");
   });
 });
 
@@ -175,13 +139,13 @@ describe("installJsonClient", () => {
   });
 });
 
-describe("insertIntoJsonc", () => {
+describe("upsertIntoJsonc", () => {
   it("should insert into existing configKey section", () => {
     const filePath = path.join(tempDir, "settings.json");
     const content = `// comment\n{\n  "context_servers": {\n    "existing": {}\n  }\n}`;
     fs.writeFileSync(filePath, content);
 
-    insertIntoJsonc(filePath, content, "context_servers", "react-grab-mcp", {
+    upsertIntoJsonc(filePath, content, "context_servers", "react-grab-mcp", {
       command: "npx",
     });
 
@@ -196,7 +160,7 @@ describe("insertIntoJsonc", () => {
     const content = `// comment\n{\n  "theme": "dark"\n}`;
     fs.writeFileSync(filePath, content);
 
-    insertIntoJsonc(filePath, content, "context_servers", "react-grab-mcp", {
+    upsertIntoJsonc(filePath, content, "context_servers", "react-grab-mcp", {
       command: "npx",
     });
 
@@ -207,18 +171,62 @@ describe("insertIntoJsonc", () => {
     expect(result).toContain('"theme"');
   });
 
-  it("should skip if server name already exists", () => {
+  it("should overwrite existing server entry", () => {
     const filePath = path.join(tempDir, "settings.json");
     const content = `{\n  "servers": {\n    "react-grab-mcp": { "old": true }\n  }\n}`;
     fs.writeFileSync(filePath, content);
 
-    insertIntoJsonc(filePath, content, "servers", "react-grab-mcp", {
+    upsertIntoJsonc(filePath, content, "servers", "react-grab-mcp", {
       command: "new",
     });
 
     const result = fs.readFileSync(filePath, "utf8");
-    expect(result).toContain('"old": true');
-    expect(result).not.toContain('"new"');
+    expect(result).toContain('"command": "new"');
+    expect(result).not.toContain('"old"');
+  });
+});
+
+describe("getOpenCodeConfigPath", () => {
+  let originalXdgConfigHome: string | undefined;
+
+  beforeEach(() => {
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = tempDir;
+  });
+
+  afterEach(() => {
+    if (originalXdgConfigHome === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    }
+  });
+
+  it("should prefer opencode.jsonc when both files exist", () => {
+    const opencodeDir = path.join(tempDir, "opencode");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.writeFileSync(path.join(opencodeDir, "opencode.json"), "{}");
+    fs.writeFileSync(path.join(opencodeDir, "opencode.jsonc"), "{}");
+
+    const result = getOpenCodeConfigPath();
+
+    expect(result).toBe(path.join(opencodeDir, "opencode.jsonc"));
+  });
+
+  it("should use opencode.json when only it exists", () => {
+    const opencodeDir = path.join(tempDir, "opencode");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.writeFileSync(path.join(opencodeDir, "opencode.json"), "{}");
+
+    const result = getOpenCodeConfigPath();
+
+    expect(result).toBe(path.join(opencodeDir, "opencode.json"));
+  });
+
+  it("should default to opencode.jsonc when neither file exists", () => {
+    const result = getOpenCodeConfigPath();
+
+    expect(result).toBe(path.join(tempDir, "opencode", "opencode.jsonc"));
   });
 });
 
@@ -231,7 +239,6 @@ describe("installTomlClient", () => {
     const content = fs.readFileSync(client.configPath, "utf8");
     expect(content).toContain("[mcp_servers.react-grab-mcp]");
     expect(content).toContain('command = "npx"');
-    expect(content).toContain('args = ["-y", "@react-grab/mcp", "--stdio"]');
   });
 
   it("should append to an existing TOML file", () => {

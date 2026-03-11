@@ -22,30 +22,10 @@ Run this command at your project root (where `next.config.ts` or `vite.config.ts
 npx -y grab@latest init
 ```
 
-Use the `-y` flag to skip interactive prompts:
-
-```bash
-npx -y grab@latest init -y
-```
-
-## Connect to Your Agent
-
-Connect React Grab directly to your coding agent (Cursor, Claude Code, Codex, Gemini, Amp, and more):
-
-```bash
-npx -y grab@latest add [agent]
-```
-
-Or connect via MCP:
+## Connect to MCP
 
 ```bash
 npx -y grab@latest add mcp
-```
-
-Disconnect an agent:
-
-```bash
-npx -y grab@latest remove [agent]
 ```
 
 ## Usage
@@ -158,28 +138,187 @@ if (process.env.NODE_ENV === "development") {
 }
 ```
 
-## Extending React Grab
+## Plugins
 
-React Grab exposes the `__REACT_GRAB__` API for extending functionality with plugins, hooks, actions, themes, and custom agents.
+Use plugins to extend React Grab's built-in UI with context menu actions, toolbar menu items, lifecycle hooks, and theme overrides. Plugins run within React Grab.
 
-See [`packages/react-grab/src/types.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/types.ts) and [`packages/react-grab/src/core/plugin-registry.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/core/plugin-registry.ts) for reference.
+Register a plugin using the `registerPlugin` and `unregisterPlugin` exports:
 
-Or copy this into an agent to generate a plugin:
+```js
+import { registerPlugin } from "react-grab";
 
-```md
-Clone https://github.com/aidenybai/react-grab into /tmp
-
-Check these files for reference:
-
-- packages/react-grab/src/types.ts (Plugin and PluginHooks interfaces)
-- packages/react-grab/src/core/plugin-registry.ts (implementation)
-
-Plugins are registered via `__REACT_GRAB__.registerPlugin({ name, hooks, actions, theme })`.
-
-Add the code in client-side code (e.g., "use client" in Next.js) inside a useEffect after React Grab loads.
-
-Generate an example plugin that logs when an element is selected.
+registerPlugin({
+  name: "my-plugin",
+  hooks: {
+    onElementSelect: (element) => {
+      console.log("Selected:", element.tagName);
+    },
+  },
+});
 ```
+
+In React, register inside a `useEffect`:
+
+```jsx
+import { registerPlugin, unregisterPlugin } from "react-grab";
+
+useEffect(() => {
+  registerPlugin({
+    name: "my-plugin",
+    actions: [
+      {
+        id: "my-action",
+        label: "My Action",
+        shortcut: "M",
+        onAction: (context) => {
+          console.log("Action on:", context.element);
+          context.hideContextMenu();
+        },
+      },
+    ],
+  });
+
+  return () => unregisterPlugin("my-plugin");
+}, []);
+```
+
+Actions use a `target` field to control where they appear. Omit `target` (or set `"context-menu"`) for the right-click menu, or set `"toolbar"` for the toolbar dropdown:
+
+```js
+actions: [
+  {
+    id: "inspect",
+    label: "Inspect",
+    shortcut: "I",
+    onAction: (ctx) => console.dir(ctx.element),
+  },
+  {
+    id: "toggle-freeze",
+    label: "Freeze",
+    target: "toolbar",
+    isActive: () => isFrozen,
+    onAction: () => toggleFreeze(),
+  },
+];
+```
+
+See [`packages/react-grab/src/types.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/types.ts) for the full `Plugin`, `PluginHooks`, and `PluginConfig` interfaces.
+
+## Primitives
+
+Use primitives to build your own element selector from scratch. Unlike plugins, primitives are standalone utility functions that don't depend on React Grab being initialized.
+
+If you're using primitives to build a custom UI and don't want the default React Grab overlay, disable auto-initialization before importing `react-grab`:
+
+```html
+<script>
+  window.__REACT_GRAB_DISABLED__ = true;
+</script>
+```
+
+Here's a simple example of how to build your own element selector with hover highlight and one-click inspection:
+
+```bash
+npm install react-grab@latest
+```
+
+```tsx
+import { useState } from "react";
+import {
+  getElementContext,
+  freeze,
+  unfreeze,
+  openFile,
+  type ReactGrabElementContext,
+} from "react-grab/primitives";
+
+const useElementSelector = (
+  onSelect: (context: ReactGrabElementContext) => void,
+) => {
+  const [isActive, setIsActive] = useState(false);
+
+  const startSelecting = () => {
+    setIsActive(true);
+
+    const highlightOverlay = document.createElement("div");
+    Object.assign(highlightOverlay.style, {
+      position: "fixed",
+      pointerEvents: "none",
+      zIndex: "999999",
+      border: "2px solid #3b82f6",
+      transition: "all 75ms ease-out",
+      display: "none",
+    });
+    document.body.appendChild(highlightOverlay);
+
+    const handleMouseMove = ({ clientX, clientY }: MouseEvent) => {
+      highlightOverlay.style.display = "none";
+      const target = document.elementFromPoint(clientX, clientY);
+      if (!target) return;
+      const { top, left, width, height } = target.getBoundingClientRect();
+      Object.assign(highlightOverlay.style, {
+        top: `${top}px`,
+        left: `${left}px`,
+        width: `${width}px`,
+        height: `${height}px`,
+        display: "block",
+      });
+    };
+
+    const handleClick = async ({ clientX, clientY }: MouseEvent) => {
+      highlightOverlay.style.display = "none";
+      const target = document.elementFromPoint(clientX, clientY);
+      teardown();
+      if (!target) return;
+      freeze();
+      onSelect(await getElementContext(target));
+      unfreeze();
+    };
+
+    const teardown = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("click", handleClick, true);
+      highlightOverlay.remove();
+      setIsActive(false);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("click", handleClick, true);
+  };
+
+  return { isActive, startSelecting };
+};
+
+const ElementSelector = () => {
+  const [context, setContext] = useState<ReactGrabElementContext | null>(null);
+  const selector = useElementSelector(setContext);
+
+  return (
+    <div>
+      <button onClick={selector.startSelecting} disabled={selector.isActive}>
+        {selector.isActive ? "Selecting…" : "Select Element"}
+      </button>
+      {context && (
+        <div>
+          <p>Component: {context.componentName}</p>
+          <p>Selector: {context.selector}</p>
+          <pre>{context.stackString}</pre>
+          <button
+            onClick={() => {
+              const frame = context.stack[0];
+              if (frame?.fileName) openFile(frame.fileName, frame.lineNumber);
+            }}
+          >
+            Open in Editor
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+```
+
+See [`packages/react-grab/src/primitives.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/primitives.ts) for the full `ReactGrabElementContext`, `getElementContext`, `freeze`, `unfreeze`, and `openFile` primitives.
 
 ## Resources & Contributing Back
 

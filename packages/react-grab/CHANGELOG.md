@@ -1,5 +1,95 @@
 # react-grab
 
+## 0.1.28
+
+### Patch Changes
+
+- fix
+- Updated dependencies
+  - @react-grab/cli@0.1.28
+
+## 0.1.27
+
+### Patch Changes
+
+- fix: install instructions
+- Updated dependencies
+  - @react-grab/cli@0.1.27
+
+## 0.1.26
+
+### Patch Changes
+
+- fix: minor tweaks
+- Updated dependencies
+  - @react-grab/cli@0.1.26
+
+## 0.1.25
+
+### Patch Changes
+
+- fix: primtiives
+- Updated dependencies
+  - @react-grab/cli@0.1.25
+
+## 0.1.24
+
+### Patch Changes
+
+- primitives
+- Updated dependencies
+  - @react-grab/cli@0.1.24
+
+## 0.1.23
+
+### Patch Changes
+
+- fix: npx command
+- Updated dependencies
+  - @react-grab/cli@0.1.23
+
+## 0.1.22
+
+### Patch Changes
+
+- fix: freezing
+
+## 0.1.21
+
+### Patch Changes
+
+- fix: up and down selection
+
+## 0.1.20
+
+### Patch Changes
+
+- fix: selection performacne
+
+## 0.1.19
+
+### Patch Changes
+
+- fix: gsap
+
+## 0.1.18
+
+### Patch Changes
+
+- fix: minor issues
+
+## 0.1.17
+
+### Patch Changes
+
+- fix: mcp
+
+## 0.1.16
+
+### Patch Changes
+
+- fix: environment detection
+
 ## 0.1.15
 
 ### Patch Changes

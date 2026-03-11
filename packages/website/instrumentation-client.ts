@@ -7,13 +7,7 @@ declare global {
 }
 
 if (typeof window !== "undefined" && !window.__REACT_GRAB__) {
-  const api = init({
-    // activationKey: "Space",
-    // activationMode: "hold",
-    // keyHoldDuration: 300,
-    // allowActivationInsideInput: false,
-    // maxContextLines: 3,
-  });
+  const api = init({});
 
   api.registerPlugin({
     name: "website-events",
@@ -26,6 +20,15 @@ if (typeof window !== "undefined" && !window.__REACT_GRAB__) {
       },
     },
   });
+
+  const isMobile =
+    navigator.maxTouchPoints > 0 || matchMedia("(pointer: coarse)").matches;
+  if (isMobile) {
+    api.registerPlugin({
+      name: "mobile-no-toolbar",
+      theme: { toolbar: { enabled: false } },
+    });
+  }
 
   window.__REACT_GRAB__ = api;
 }

@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { detect } from "@antfu/ni";
 import ignore from "ignore";
 
@@ -229,9 +229,7 @@ const hasReactDependency = (projectPath: string): boolean => {
   }
 };
 
-const buildReactProject = (
-  projectPath: string,
-): WorkspaceProject | null => {
+const buildReactProject = (projectPath: string): WorkspaceProject | null => {
   const framework = detectFramework(projectPath);
   const hasReact = hasReactDependency(projectPath);
   if (!hasReact && framework === "unknown") return null;
@@ -246,9 +244,7 @@ const buildReactProject = (
   return { name, path: projectPath, framework, hasReact };
 };
 
-const findWorkspaceProjects = (
-  projectRoot: string,
-): WorkspaceProject[] => {
+const findWorkspaceProjects = (projectRoot: string): WorkspaceProject[] => {
   const patterns = getWorkspacePatterns(projectRoot);
   const projects: WorkspaceProject[] = [];
 
@@ -333,10 +329,32 @@ const MAX_SCAN_DEPTH = 2;
 
 export const findReactProjects = (projectRoot: string): WorkspaceProject[] => {
   if (detectMonorepo(projectRoot)) {
-    return findWorkspaceProjects(projectRoot);
+    const workspaceProjects = findWorkspaceProjects(projectRoot);
+    if (workspaceProjects.length > 0) {
+      return workspaceProjects;
+    }
   }
+
   const ignorer = loadGitignore(projectRoot);
-  return scanDirectoryForProjects(projectRoot, ignorer, MAX_SCAN_DEPTH);
+  const scannedProjects = scanDirectoryForProjects(
+    projectRoot,
+    ignorer,
+    MAX_SCAN_DEPTH,
+  );
+  if (scannedProjects.length > 0) {
+    return scannedProjects;
+  }
+
+  let currentDirectory = dirname(projectRoot);
+  while (currentDirectory !== dirname(currentDirectory)) {
+    const parentProject = buildReactProject(currentDirectory);
+    if (parentProject) {
+      return [parentProject];
+    }
+    currentDirectory = dirname(currentDirectory);
+  }
+
+  return [];
 };
 
 const hasReactGrabInFile = (filePath: string): boolean => {
@@ -407,7 +425,8 @@ const AGENT_PACKAGES = [
   "@react-grab/codex",
   "@react-grab/gemini",
   "@react-grab/amp",
-  "@react-grab/ami",
+  "@react-grab/droid",
+  "@react-grab/copilot",
   "@react-grab/mcp",
 ];
 
@@ -477,7 +496,9 @@ export type AgentCLI =
   | "opencode"
   | "codex"
   | "gemini"
-  | "amp";
+  | "amp"
+  | "copilot"
+  | "droid";
 
 const AGENT_CLI_COMMANDS: AgentCLI[] = [
   "claude",
@@ -486,6 +507,8 @@ const AGENT_CLI_COMMANDS: AgentCLI[] = [
   "codex",
   "gemini",
   "amp",
+  "copilot",
+  "droid",
 ];
 
 const isCommandAvailable = (command: string): boolean => {

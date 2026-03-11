@@ -4,6 +4,7 @@ node_modules
 .turbo
 .ami-token
 dist
+.next
 **/*.tgz
 coverage
 react-grab-extension.zip
@@ -11,5 +12,6 @@ tsup.config.bundled_*.mjs
 packages/website/public/react-grab.global.js
 test-results
 playwright-report
+.vercel
 .cursor/debug.log
 .cursor

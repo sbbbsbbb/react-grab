@@ -1,9 +1,22 @@
 "use client";
 
-import { useEffect, useState, useCallback, type ReactElement } from "react";
-import { Copy, Check } from "lucide-react";
-import { COPY_FEEDBACK_DURATION_MS } from "@/constants";
+import {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  type ReactElement,
+} from "react";
+import { Copy, Check, Terminal, ChevronDown } from "lucide-react";
+import {
+  COPY_FEEDBACK_DURATION_MS,
+  PROMPT_INSTALL_COLLAPSE_LINE_THRESHOLD,
+  PROMPT_INSTALL_MAX_HEIGHT_PX,
+} from "@/constants";
 import { cn } from "@/utils/cn";
+import { IconNextjs } from "./icons/icon-nextjs";
+import { IconVite } from "./icons/icon-vite";
+import { IconTanstack } from "./icons/icon-tanstack";
 import { detectMobile } from "@/utils/detect-mobile";
 import { hotkeyToString } from "@/utils/hotkey-to-string";
 import type { RecordedHotkey } from "./grab-element-button";
@@ -15,7 +28,7 @@ interface InlineCodeProps {
 }
 
 const InlineCode = ({ children }: InlineCodeProps): ReactElement => (
-  <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs text-white/70">
+  <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
     {children}
   </code>
 );
@@ -26,6 +39,7 @@ interface InstallTab {
   id: string;
   label: string;
   description: React.ReactNode;
+  variant: "code" | "command" | "prompt";
   lang?: "tsx" | "bash";
   getCode: (hotkey: RecordedHotkey | null) => string;
   getChangedLines: (hotkey: RecordedHotkey | null) => number[];
@@ -35,11 +49,40 @@ const formatInitOptions = (hotkey: RecordedHotkey): string => {
   return `{ activationKey: "${hotkeyToString(hotkey)}" }`;
 };
 
+const createPromptInstallInstructions = (
+  hotkey: RecordedHotkey | null,
+): string => {
+  const activationKeyInstruction = hotkey
+    ? `Set the activation key to "${hotkeyToString(hotkey)}". For Next.js Script tags, set data-options='{"activationKey":"${hotkeyToString(
+        hotkey,
+      )}"}'. For Vite & TanStack Start, use react-grab/core and call init(${formatInitOptions(
+        hotkey,
+      )}).`
+    : "Keep the default activation key.";
+
+  return `Set up React Grab in this workspace. If this is a monorepo, ask me which package to install it in.
+
+1. Find the React app package in this workspace.
+2. If this is a monorepo, ask me which package to configure before making changes.
+3. Detect the package manager from lockfiles and install react-grab@latest in the selected package.
+4. Detect the framework and apply manual integration:
+- Next.js App Router: in app/layout.tsx, add next/script and include a development-only Script tag with src="//unpkg.com/react-grab/dist/index.global.js", crossOrigin="anonymous", and strategy="beforeInteractive".
+- Next.js Pages Router: in pages/_document.tsx, add the same development-only Script tag inside <Head>.
+- Vite: in index.html <head>, add <script type="module">if (import.meta.env.DEV) { import("react-grab"); }</script>.
+- TanStack Start: in src/routes/__root.tsx, inside useEffect and an import.meta.env.DEV check, run void import("react-grab").
+5. ${activationKeyInstruction}
+6. Keep all React Grab setup development-only.
+7. Show me the edited files and the exact install command you ran.
+8. If the setup does not work, suggest running the React Grab CLI:
+\`npx -y grab@latest init\`.`;
+};
+
 const installTabsData: InstallTab[] = [
   {
     id: "cli",
     label: "CLI",
     description: "Run this command at your project root",
+    variant: "command",
     lang: "bash",
     getCode: (hotkey) => {
       if (hotkey) {
@@ -50,13 +93,22 @@ const installTabsData: InstallTab[] = [
     getChangedLines: () => [],
   },
   {
+    id: "prompt",
+    label: "Prompt",
+    description: "Paste this full setup prompt in your coding agent's chat",
+    variant: "prompt",
+    getCode: (hotkey) => createPromptInstallInstructions(hotkey),
+    getChangedLines: () => [],
+  },
+  {
     id: "next-app",
-    label: "Next.js (App)",
+    label: "Next.js",
     description: (
       <>
         Add this inside of your <InlineCode>app/layout.tsx</InlineCode>
       </>
     ),
+    variant: "code",
     getCode: (hotkey) => {
       const dataOptionsAttr = hotkey
         ? `\n            data-options='{"activationKey":"${hotkeyToString(
@@ -86,46 +138,6 @@ export default function RootLayout({ children }) {
       hotkey ? [7, 8, 9, 10, 11, 12, 13, 14] : [7, 8, 9, 10, 11, 12, 13],
   },
   {
-    id: "next-pages",
-    label: "Next.js (Pages)",
-    description: (
-      <>
-        Add this into your <InlineCode>pages/_document.tsx</InlineCode>
-      </>
-    ),
-    getCode: (hotkey) => {
-      const dataOptionsAttr = hotkey
-        ? `\n            data-options='{"activationKey":"${hotkeyToString(
-            hotkey,
-          )}"}'`
-        : "";
-      return `import { Html, Head, Main, NextScript } from "next/document";
-import Script from "next/script";
-
-export default function Document() {
-  return (
-    <Html lang="en">
-      <Head>
-        {process.env.NODE_ENV === "development" && (
-          <Script
-            src="//unpkg.com/react-grab/dist/index.global.js"
-            crossOrigin="anonymous"
-            strategy="beforeInteractive"${dataOptionsAttr}
-          />
-        )}
-      </Head>
-      <body>
-        <Main />
-        <NextScript />
-      </body>
-    </Html>
-  );
-}`;
-    },
-    getChangedLines: (hotkey) =>
-      hotkey ? [8, 9, 10, 11, 12, 13, 14, 15] : [8, 9, 10, 11, 12, 13, 14],
-  },
-  {
     id: "vite",
     label: "Vite",
     description: (
@@ -134,6 +146,7 @@ export default function Document() {
         development
       </>
     ),
+    variant: "code",
     getCode: (hotkey) => {
       if (hotkey) {
         return `<!doctype html>
@@ -175,55 +188,6 @@ export default function Document() {
       hotkey ? [4, 5, 6, 7, 8, 9, 10, 11] : [4, 5, 6, 7, 8, 9, 10],
   },
   {
-    id: "webpack",
-    label: "Webpack",
-    description: (
-      <>
-        First <InlineCode>npm install react-grab</InlineCode>, then add this at
-        the top of your main entry file
-      </>
-    ),
-    getCode: (hotkey) => {
-      if (hotkey) {
-        return `import React from "react";
-import ReactDOM from "react-dom/client";
-import App from "./App";
-
-if (process.env.NODE_ENV === "development") {
-  import("react-grab/core").then(({ init }) => {
-    init(${formatInitOptions(hotkey)});
-  });
-}
-
-const root = ReactDOM.createRoot(
-  document.getElementById("root") as HTMLElement
-);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);`;
-      }
-      return `import React from "react";
-import ReactDOM from "react-dom/client";
-import App from "./App";
-
-if (process.env.NODE_ENV === "development") {
-  import("react-grab");
-}
-
-const root = ReactDOM.createRoot(
-  document.getElementById("root") as HTMLElement
-);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);`;
-    },
-    getChangedLines: (hotkey) => (hotkey ? [5, 6, 7, 8, 9] : [5, 6, 7]),
-  },
-  {
     id: "tanstack",
     label: "TanStack Start",
     description: (
@@ -231,6 +195,7 @@ root.render(
         Add this inside your <InlineCode>src/routes/__root.tsx</InlineCode>
       </>
     ),
+    variant: "code",
     getCode: (hotkey) => {
       if (hotkey) {
         return `import { useEffect } from "react";
@@ -274,6 +239,12 @@ function RootComponent() {
   },
 ];
 
+const HEADING_TEXT_BY_VARIANT: Record<InstallTab["variant"], string> = {
+  prompt: "Copy this to your agent:",
+  command: "Run this command to get started:",
+  code: "It takes 1 script tag to get started:",
+};
+
 interface InstallTabsProps {
   showHeading?: boolean;
   showAgentNote?: boolean;
@@ -288,15 +259,24 @@ export const InstallTabs = ({
     installTabsData[0]?.id,
   );
   const [didCopy, setDidCopy] = useState(false);
+  const [isPromptExpanded, setIsPromptExpanded] = useState(false);
+  const [promptExpandedMaxHeightPx, setPromptExpandedMaxHeightPx] = useState(
+    PROMPT_INSTALL_MAX_HEIGHT_PX,
+  );
   const [highlightedCodes, setHighlightedCodes] = useState<
     Record<string, string>
   >({});
   const [isMobile, setIsMobile] = useState(false);
+  const promptContentContainerRef = useRef<HTMLDivElement | null>(null);
 
   const activeTab =
     installTabsData.find((tab) => tab.id === activeTabId) ?? installTabsData[0];
   const activeCode = activeTab.getCode(customHotkey ?? null);
   const activeChangedLines = activeTab.getChangedLines(customHotkey ?? null);
+  const isPromptTab = activeTab.variant === "prompt";
+  const shouldShowPromptExpandButton =
+    isPromptTab &&
+    activeCode.split("\n").length > PROMPT_INSTALL_COLLAPSE_LINE_THRESHOLD;
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -308,11 +288,14 @@ export const InstallTabs = ({
       const results = await Promise.all(
         installTabsData.map(async (tab) => ({
           id: tab.id,
-          html: await highlightCode({
-            code: tab.getCode(hotkey),
-            lang: tab.lang ?? "tsx",
-            changedLines: tab.getChangedLines(hotkey),
-          }),
+          html:
+            tab.variant === "prompt"
+              ? ""
+              : await highlightCode({
+                  code: tab.getCode(hotkey),
+                  lang: tab.lang ?? "tsx",
+                  changedLines: tab.getChangedLines(hotkey),
+                }),
         })),
       );
       const codes: Record<string, string> = {};
@@ -328,6 +311,30 @@ export const InstallTabs = ({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     updateHighlightedCodes(customHotkey ?? null);
   }, [customHotkey, updateHighlightedCodes]);
+
+  useEffect(() => {
+    setIsPromptExpanded(false);
+  }, [activeTab.id, activeCode]);
+
+  useEffect(() => {
+    if (!isPromptTab || !promptContentContainerRef.current) {
+      return;
+    }
+
+    const promptContentContainerElement = promptContentContainerRef.current;
+    const updatePromptExpandedMaxHeightPx = () => {
+      setPromptExpandedMaxHeightPx(promptContentContainerElement.scrollHeight);
+    };
+
+    updatePromptExpandedMaxHeightPx();
+
+    const resizeObserver = new ResizeObserver(updatePromptExpandedMaxHeightPx);
+    resizeObserver.observe(promptContentContainerElement);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [activeCode, isPromptTab]);
 
   const handleCopyClick = () => {
     if (typeof navigator === "undefined" || !navigator.clipboard) return;
@@ -355,29 +362,26 @@ export const InstallTabs = ({
     return null;
   }
 
-  const headingText =
-    activeTabId === "cli"
-      ? "Run this command to get started:"
-      : "It takes 1 script tag to get started:";
+  const headingText = HEADING_TEXT_BY_VARIANT[activeTab.variant];
 
   return (
     <div>
       {showHeading && (
-        <span className="hidden sm:inline text-white">
+        <span className="hidden sm:inline text-foreground">
           {headingText}
-          {activeTabId === "cli" && (
+          {activeTab.variant !== "code" && (
             <button
               type="button"
               onClick={() => setActiveTabId("next-app")}
-              className="ml-3 text-xs italic text-white/40 hover:text-white/60 hover:underline transition-colors sm:text-sm"
+              className="ml-3 text-xs italic text-muted-foreground hover:text-foreground/60 hover:underline transition-colors sm:text-sm"
             >
               Prefer manual install?
             </button>
           )}
         </span>
       )}
-      <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-white/5 text-white shadow-[0_8px_30px_rgb(0,0,0,0.3)]">
-        <div className="flex items-center gap-4 overflow-x-auto border-b border-white/10 px-4 pt-2">
+      <div className="mt-4 overflow-hidden rounded-lg border border-border bg-card text-foreground shadow-lg">
+        <div className="flex items-center gap-4 overflow-x-auto border-b border-border px-4 pt-2">
           {installTabsData.map((tab) => {
             const isActive = tab.id === activeTab.id;
 
@@ -386,46 +390,128 @@ export const InstallTabs = ({
                 key={tab.id}
                 type="button"
                 className={cn(
-                  "shrink-0 whitespace-nowrap border-b pb-2 font-sans text-sm transition-colors sm:text-base",
+                  "group/tab shrink-0 whitespace-nowrap border-b pb-2 font-sans text-sm transition-colors sm:text-base",
                   isActive
-                    ? "border-white text-white"
-                    : "border-transparent text-white/60 hover:text-white",
+                    ? "border-foreground text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground",
                 )}
                 onClick={() => setActiveTabId(tab.id)}
               >
-                <span>{tab.label}</span>
+                <span className="inline-flex items-center gap-1.5">
+                  {tab.id === "cli" && <Terminal size={14} />}
+                  {tab.id === "next-app" && (
+                    <IconNextjs
+                      className={
+                        isActive
+                          ? "grayscale-0 opacity-100"
+                          : "group-hover/tab:grayscale-0 group-hover/tab:opacity-100 transition-all"
+                      }
+                    />
+                  )}
+                  {tab.id === "vite" && (
+                    <IconVite
+                      className={
+                        isActive
+                          ? "grayscale-0 opacity-100"
+                          : "group-hover/tab:grayscale-0 group-hover/tab:opacity-100 transition-all"
+                      }
+                    />
+                  )}
+                  {tab.id === "tanstack" && (
+                    <IconTanstack
+                      className={
+                        isActive
+                          ? "grayscale-0 opacity-100"
+                          : "group-hover/tab:grayscale-0 group-hover/tab:opacity-100 transition-all"
+                      }
+                    />
+                  )}
+                  {tab.label}
+                </span>
               </button>
             );
           })}
         </div>
-        <div className="bg-black/60 relative">
+        <div className="bg-background/60 relative">
           <div className="relative">
-            {activeTabId === "cli" ? (
-              <button
-                type="button"
-                onClick={handleCopyClick}
-                className="group flex w-full items-center justify-between gap-4 px-4 py-6 transition-colors hover:bg-white/5"
-              >
-                {highlightedCode ? (
+            {activeTab.variant !== "code" ? (
+              activeTab.variant === "prompt" ? (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={handleCopyClick}
+                    className="touch-hitbox absolute! right-4 top-4 text-muted-foreground transition-colors hover:text-foreground z-10"
+                  >
+                    {didCopy ? <Check size={16} /> : <Copy size={16} />}
+                  </button>
                   <div
-                    className="overflow-x-auto font-mono text-base leading-relaxed highlighted-code"
-                    dangerouslySetInnerHTML={{ __html: highlightedCode }}
-                  />
-                ) : (
-                  <pre className="overflow-x-auto font-mono text-base leading-relaxed text-white/80">
-                    <code>{activeCode}</code>
-                  </pre>
-                )}
-                <span className="shrink-0 text-white/50 transition-colors group-hover:text-white">
-                  {didCopy ? <Check size={16} /> : <Copy size={16} />}
-                </span>
-              </button>
+                    ref={promptContentContainerRef}
+                    className="overflow-hidden px-4 py-6 transition-[max-height] duration-200 ease-out"
+                    style={
+                      shouldShowPromptExpandButton
+                        ? {
+                            maxHeight: isPromptExpanded
+                              ? `${promptExpandedMaxHeightPx}px`
+                              : `${PROMPT_INSTALL_MAX_HEIGHT_PX}px`,
+                          }
+                        : undefined
+                    }
+                  >
+                    <p className="text-left text-base leading-relaxed text-foreground/80 whitespace-pre-wrap pr-10 pb-10">
+                      {activeCode}
+                    </p>
+                  </div>
+                  {shouldShowPromptExpandButton && !isPromptExpanded && (
+                    <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-24 bg-linear-to-t from-card via-card/95 to-transparent" />
+                  )}
+                  {shouldShowPromptExpandButton && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setIsPromptExpanded((previous) => !previous)
+                      }
+                      className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1 rounded-md border border-border bg-card/90 px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <span>
+                        {isPromptExpanded ? "Show less" : "Show full prompt"}
+                      </span>
+                      <ChevronDown
+                        size={14}
+                        className={cn(
+                          "transition-transform",
+                          isPromptExpanded && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleCopyClick}
+                  className="group flex w-full items-center justify-between gap-4 px-4 py-6 transition-colors hover:bg-muted/50"
+                >
+                  {highlightedCode ? (
+                    <div
+                      className="overflow-x-auto font-mono text-base leading-relaxed highlighted-code"
+                      dangerouslySetInnerHTML={{ __html: highlightedCode }}
+                    />
+                  ) : (
+                    <pre className="overflow-x-auto font-mono text-base leading-relaxed text-foreground/80">
+                      <code>{activeCode}</code>
+                    </pre>
+                  )}
+                  <span className="shrink-0 text-muted-foreground transition-colors group-hover:text-foreground">
+                    {didCopy ? <Check size={16} /> : <Copy size={16} />}
+                  </span>
+                </button>
+              )
             ) : (
               <div className="group relative">
                 <button
                   type="button"
                   onClick={handleCopyClick}
-                  className="touch-hitbox absolute! right-4 top-4 text-white/50 opacity-0 transition-opacity hover:text-white group-hover:opacity-100 z-10"
+                  className="touch-hitbox absolute! right-4 top-4 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 z-10"
                 >
                   {didCopy ? <Check size={16} /> : <Copy size={16} />}
                 </button>
@@ -435,7 +521,7 @@ export const InstallTabs = ({
                     dangerouslySetInnerHTML={{ __html: highlightedCode }}
                   />
                 ) : (
-                  <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed text-white/80">
+                  <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed text-foreground/80">
                     <code>{activeCode}</code>
                   </pre>
                 )}
@@ -444,15 +530,15 @@ export const InstallTabs = ({
           </div>
         </div>
       </div>
-      {activeTabId !== "cli" && (
-        <span className="mt-4 block text-sm text-white/50 sm:text-base">
+      {activeTab.variant === "code" && (
+        <span className="mt-4 block text-sm text-muted-foreground sm:text-base">
           {activeTab.description}
         </span>
       )}
-      {showAgentNote && activeTabId !== "cli" && (
-        <span className="mt-2 block text-sm text-white/50 sm:text-base">
+      {showAgentNote && activeTab.variant === "code" && (
+        <span className="mt-2 block text-sm text-muted-foreground sm:text-base">
           Want to connect directly to your coding agent?{" "}
-          <a href="/blog/agent" className="underline hover:text-white/70">
+          <a href="/blog/agent" className="underline hover:text-foreground/70">
             See our agent connection guide
           </a>
         </span>

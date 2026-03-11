@@ -1,6 +1,6 @@
 {
   "name": "react-grab",
-  "version": "0.1.15",
+  "version": "0.1.28",
   "description": "Select context for coding agents directly from your website",
   "keywords": [
     "agent",
@@ -22,8 +22,13 @@
     "type": "git",
     "url": "git+https://github.com/aidenybai/react-grab.git"
   },
+  "bin": {
+    "react-grab": "./bin/cli.js"
+  },
   "files": [
+    "bin",
     "dist",
+    "scripts/postinstall.cjs",
     "package.json",
     "README.md",
     "LICENSE"
@@ -55,14 +60,14 @@
         "default": "./dist/core/index.cjs"
       }
     },
-    "./react": {
+    "./primitives": {
       "import": {
-        "types": "./dist/react.d.ts",
-        "default": "./dist/react.js"
+        "types": "./dist/primitives.d.ts",
+        "default": "./dist/primitives.js"
       },
       "require": {
-        "types": "./dist/react.d.cts",
-        "default": "./dist/react.cjs"
+        "types": "./dist/primitives.d.cts",
+        "default": "./dist/primitives.cjs"
       }
     },
     "./src/*": "./src/*",
@@ -81,6 +86,7 @@
     "css:watch": "tailwindcss -i ./src/styles.css -o ./dist/styles.css -w",
     "prebuild": "mkdir -p dist && tailwindcss -i ./src/styles.css -o ./dist/styles.css -m && node scripts/css-rem-to-px.mjs",
     "build": "NODE_ENV=production tsup",
+    "postinstall": "node ./scripts/postinstall.cjs",
     "dev": "concurrently \"pnpm:css:watch\" \"tsup --watch --ignore-watch dist\"",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
@@ -93,7 +99,10 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
-    "bippy": "^0.5.30",
+    "@medv/finder": "^4.0.2",
+    "@react-grab/cli": "workspace:*",
+    "bippy": "^0.5.32",
+    "element-source": "^0.0.3",
     "solid-js": "^1.9.10"
   },
   "devDependencies": {

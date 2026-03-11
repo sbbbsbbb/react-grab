@@ -18,7 +18,9 @@ import {
   LABEL_GAP_PX,
   PANEL_STYLES,
   SELECTION_LABEL_OFFSCREEN_PX,
+  TEXTAREA_MAX_HEIGHT_PX,
 } from "../../constants.js";
+import { autoResizeTextarea } from "../../utils/auto-resize-textarea.js";
 import { getArrowSize } from "../../utils/get-arrow-size.js";
 import { isKeyboardEventTriggeredByInput } from "../../utils/is-keyboard-event-triggered-by-input.js";
 import { cn } from "../../utils/cn.js";
@@ -33,6 +35,7 @@ import { BottomSection } from "./bottom-section.js";
 import { DiscardPrompt } from "./discard-prompt.js";
 import { ErrorView } from "./error-view.js";
 import { CompletionView } from "./completion-view.js";
+import { ArrowNavigationMenu } from "./arrow-navigation-menu.js";
 
 const DEFAULT_OFFSCREEN_POSITION = {
   left: SELECTION_LABEL_OFFSCREEN_PX,
@@ -86,19 +89,11 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     ) {
       return true;
     }
+    if (props.arrowNavigationState?.isVisible) return true;
     return false;
   };
 
-  const measureContainer = () => {
-    if (containerRef && !isTagCurrentlyHovered) {
-      const rect = containerRef.getBoundingClientRect();
-      setMeasuredWidth(rect.width);
-      setMeasuredHeight(rect.height);
-    }
-    if (panelRef) {
-      setPanelWidth(panelRef.getBoundingClientRect().width);
-    }
-  };
+  let resizeObserver: ResizeObserver | undefined;
 
   const handleTagHoverChange = (hovered: boolean) => {
     isTagCurrentlyHovered = hovered;
@@ -121,25 +116,44 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
 
     if (isEnterToExpand) {
       event.preventDefault();
-      event.stopPropagation();
       event.stopImmediatePropagation();
       props.onToggleExpand?.();
     } else if (isCtrlCToAbort) {
       event.preventDefault();
-      event.stopPropagation();
       event.stopImmediatePropagation();
       props.onAbort?.();
     }
   };
 
   onMount(() => {
-    measureContainer();
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const rect = entry.target.getBoundingClientRect();
+        if (entry.target === containerRef && !isTagCurrentlyHovered) {
+          setMeasuredWidth(rect.width);
+          setMeasuredHeight(rect.height);
+        } else if (entry.target === panelRef) {
+          setPanelWidth(rect.width);
+        }
+      }
+    });
+    if (containerRef) {
+      const rect = containerRef.getBoundingClientRect();
+      setMeasuredWidth(rect.width);
+      setMeasuredHeight(rect.height);
+      resizeObserver.observe(containerRef);
+    }
+    if (panelRef) {
+      setPanelWidth(panelRef.getBoundingClientRect().width);
+      resizeObserver.observe(panelRef);
+    }
     window.addEventListener("scroll", handleViewportChange, true);
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("keydown", handleGlobalKeyDown, { capture: true });
   });
 
   onCleanup(() => {
+    resizeObserver?.disconnect();
     window.removeEventListener("scroll", handleViewportChange, true);
     window.removeEventListener("resize", handleViewportChange);
     window.removeEventListener("keydown", handleGlobalKeyDown, {
@@ -155,41 +169,14 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     }
   });
 
-  const sizeAffectingSignature = createMemo(() => [
-    props.tagName,
-    props.componentName,
-    props.elementsCount,
-    props.statusText,
-    props.inputValue,
-    props.hasAgent,
-    props.isPromptMode,
-    props.isPendingDismiss,
-    props.error,
-    props.isPendingAbort,
-    props.visible,
-    props.status,
-    props.actionCycleState?.items,
-    props.actionCycleState?.activeIndex,
-    props.actionCycleState?.isVisible,
-  ]);
-
-  createEffect(() => {
-    // HACK: Trigger measurement when content that affects size changes.
-    // Solid's fine-grained reactivity means we do not re-render the entire
-    // component on every prop change. Label positioning depends on measured
-    // width/height for centering, and width/height depends on rendered content.
-    // We therefore force a re-measure whenever any size-affecting input changes.
-    // Without this, switching from a short tag to a long component name can keep
-    // stale width and offset the label incorrectly.
-    void sizeAffectingSignature();
-    queueMicrotask(measureContainer);
-  });
-
   createEffect(() => {
     if (props.isPromptMode && inputRef && props.onSubmit) {
       // HACK: Defer focus one tick so the textarea is fully mounted.
       const focusTimeout = setTimeout(() => {
-        inputRef?.focus();
+        if (inputRef) {
+          inputRef.focus();
+          autoResizeTextarea(inputRef, TEXTAREA_MAX_HEIGHT_PX);
+        }
       }, DEFERRED_EXECUTION_DELAY_MS);
       onCleanup(() => {
         clearTimeout(focusTimeout);
@@ -213,8 +200,8 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
       };
     }
 
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
 
     const isSelectionVisibleInViewport =
       bounds.x + bounds.width > 0 &&
@@ -294,8 +281,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     };
   });
 
-  const computedPosition = () => positionComputation().position;
-
   createEffect(() => {
     const result = positionComputation();
     if (result.computedArrowPosition !== null) {
@@ -310,7 +295,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
       return;
     }
 
-    event.stopPropagation();
     event.stopImmediatePropagation();
 
     const isEnterWithoutShift = event.code === "Enter" && !event.shiftKey;
@@ -330,6 +314,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     if (!(inputTarget instanceof HTMLTextAreaElement)) {
       return;
     }
+    autoResizeTextarea(inputTarget, TEXTAREA_MAX_HEIGHT_PX);
     props.onInputChange?.(inputTarget.value);
   };
 
@@ -346,8 +331,10 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
   const actionCycleActiveIndex = () => props.actionCycleState?.activeIndex ?? 0;
   const isActionCycleVisible = () => Boolean(props.actionCycleState?.isVisible);
 
+  const isArrowNavigationVisible = () =>
+    Boolean(props.arrowNavigationState?.isVisible);
+
   const handleTagClick = (event: MouseEvent) => {
-    event.stopPropagation();
     event.stopImmediatePropagation();
     if (props.filePath && props.onOpen) {
       props.onOpen();
@@ -357,7 +344,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
   const isTagClickable = () => Boolean(props.filePath && props.onOpen);
 
   const handleContainerPointerDown = (event: PointerEvent) => {
-    event.stopPropagation();
     event.stopImmediatePropagation();
     const isEditableInputVisible =
       canInteract() &&
@@ -387,16 +373,15 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
           "fixed font-sans text-[13px] antialiased filter-[drop-shadow(0px_1px_2px_#51515140)] select-none transition-opacity duration-100 ease-out",
         )}
         style={{
-          top: `${computedPosition().top}px`,
-          left: `${computedPosition().left}px`,
-          transform: `translateX(calc(-50% + ${computedPosition().edgeOffsetX}px))`,
+          top: `${positionComputation().position.top}px`,
+          left: `${positionComputation().position.left}px`,
+          transform: `translateX(calc(-50% + ${positionComputation().position.edgeOffsetX}px))`,
           "z-index": "2147483647",
           "pointer-events": shouldEnablePointerEvents() ? "auto" : "none",
           opacity: props.status === "fading" || isInternalFading() ? 0 : 1,
         }}
         onPointerDown={handleContainerPointerDown}
         onClick={(event) => {
-          event.stopPropagation();
           event.stopImmediatePropagation();
         }}
         onMouseEnter={() => props.onHoverChange?.(true)}
@@ -405,8 +390,8 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
         <Show when={!props.hideArrow}>
           <Arrow
             position={arrowPosition()}
-            leftPercent={computedPosition().arrowLeftPercent}
-            leftOffsetPx={computedPosition().arrowLeftOffset}
+            leftPercent={positionComputation().position.arrowLeftPercent}
+            leftOffsetPx={positionComputation().position.arrowLeftOffset}
             labelWidth={panelWidth()}
           />
         </Show>
@@ -423,9 +408,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
             onDismiss={props.onDismiss}
             onUndo={props.onUndo}
             onFollowUpSubmit={props.onFollowUpSubmit}
-            onCopyStateChange={() => {
-              queueMicrotask(measureContainer);
-            }}
             onFadingChange={setIsInternalFading}
             onShowContextMenu={props.onShowContextMenu}
           />
@@ -464,7 +446,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
                       style={{
                         "field-sizing": "content",
                         "min-height": "16px",
-                        "max-height": "95px",
+                        "max-height": `${TEXTAREA_MAX_HEIGHT_PX}px`,
                         "scrollbar-width": "none",
                       }}
                       value={props.inputValue ?? ""}
@@ -500,8 +482,17 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
           </Show>
 
           <Show when={canInteract() && !props.isPromptMode}>
-            <div class="contain-layout shrink-0 flex flex-col items-start w-fit h-fit">
-              <div class="contain-layout shrink-0 flex items-center gap-1 py-1.5 w-fit h-fit px-2">
+            <div
+              class="contain-layout shrink-0 flex flex-col items-start w-fit h-fit"
+              classList={{ "min-w-[100px]": isArrowNavigationVisible() }}
+            >
+              <div
+                class="contain-layout shrink-0 flex items-center gap-1 w-fit h-fit px-2"
+                classList={{
+                  "py-1.5": !isArrowNavigationVisible(),
+                  "pt-1.5 pb-1": isArrowNavigationVisible(),
+                }}
+              >
                 <TagBadge
                   tagName={tagDisplay()}
                   componentName={componentNameDisplay()}
@@ -509,10 +500,23 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
                   onClick={handleTagClick}
                   onHoverChange={handleTagHoverChange}
                   shrink
-                  forceShowIcon={Boolean(props.isContextMenuOpen)}
+                  forceShowIcon={
+                    isArrowNavigationVisible()
+                      ? isTagClickable()
+                      : Boolean(props.isContextMenuOpen)
+                  }
                 />
               </div>
-              <Show when={isActionCycleVisible()}>
+              <Show when={props.arrowNavigationState?.isVisible}>
+                <ArrowNavigationMenu
+                  items={props.arrowNavigationState!.items}
+                  activeIndex={props.arrowNavigationState!.activeIndex}
+                  onSelect={(index) => props.onArrowNavigationSelect?.(index)}
+                />
+              </Show>
+              <Show
+                when={!isArrowNavigationVisible() && isActionCycleVisible()}
+              >
                 <BottomSection>
                   <div class="flex flex-col w-[calc(100%+16px)] -mx-2 -my-1.5">
                     <For each={actionCycleItems()}>
@@ -581,7 +585,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
                     style={{
                       "field-sizing": "content",
                       "min-height": "16px",
-                      "max-height": "95px",
+                      "max-height": `${TEXTAREA_MAX_HEIGHT_PX}px`,
                       "scrollbar-width": "none",
                     }}
                     value={props.inputValue ?? ""}

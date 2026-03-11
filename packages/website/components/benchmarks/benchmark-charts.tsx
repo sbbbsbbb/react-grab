@@ -57,31 +57,38 @@ interface CustomTooltipProps {
 
 const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
-    const data = payload[0].payload;
+    const tooltipData = payload[0].payload;
     return (
-      <div className="rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] p-3 shadow-xl">
-        <p className="mb-2 text-sm font-medium text-neutral-200">{label}</p>
-        {payload.map((entry, index) => {
-          const isControl = entry.name === "Control";
-          const rawValue = isControl ? data.ControlRaw : data.TreatmentRaw;
-          const unit = data.unit;
+      <div className="rounded-lg border border-border bg-card p-3 shadow-xl">
+        <p className="mb-2 text-sm font-medium text-foreground/80">{label}</p>
+        {payload.map((payloadEntry) => {
+          const isControl = payloadEntry.name === "Control";
+          const rawValue = isControl
+            ? tooltipData.ControlRaw
+            : tooltipData.TreatmentRaw;
+          const unit = tooltipData.unit;
           const formattedValue =
             typeof rawValue === "number"
               ? formatMetricValue(rawValue, unit)
               : rawValue;
 
           return (
-            <div key={index} className="flex items-center gap-2 text-xs">
+            <div
+              key={payloadEntry.name}
+              className="flex items-center gap-2 text-xs"
+            >
               <div
                 className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: entry.fill }}
+                style={{ backgroundColor: payloadEntry.fill }}
               />
-              <span className="text-neutral-400">{entry.name}:</span>
-              <span className="font-mono text-neutral-200">
+              <span className="text-muted-foreground">
+                {payloadEntry.name}:
+              </span>
+              <span className="font-mono text-foreground/80">
                 {formattedValue}
               </span>
-              <span className="text-neutral-500 ml-1">
-                ({entry.value.toFixed(0)}%)
+              <span className="text-muted-foreground ml-1">
+                ({payloadEntry.value.toFixed(0)}%)
               </span>
             </div>
           );
@@ -140,8 +147,10 @@ const AnimatedBar = ({
 AnimatedBar.displayName = "AnimatedBar";
 
 export const BenchmarkChartsTweet = ({ results }: BenchmarkChartsProps) => {
-  const controlResults = results.filter((r) => r.type === "control");
-  const treatmentResults = results.filter((r) => r.type === "treatment");
+  const controlResults = results.filter((result) => result.type === "control");
+  const treatmentResults = results.filter(
+    (result) => result.type === "treatment",
+  );
 
   if (controlResults.length === 0 || treatmentResults.length === 0) {
     return null;
@@ -151,11 +160,11 @@ export const BenchmarkChartsTweet = ({ results }: BenchmarkChartsProps) => {
   const treatmentStats = calculateStats(treatmentResults);
 
   const controlTotalCost = controlResults.reduce(
-    (sum, r) => sum + r.costUsd,
+    (sum, result) => sum + result.costUsd,
     0,
   );
   const treatmentTotalCost = treatmentResults.reduce(
-    (sum, r) => sum + r.costUsd,
+    (sum, result) => sum + result.costUsd,
     0,
   );
 
@@ -177,7 +186,7 @@ export const BenchmarkChartsTweet = ({ results }: BenchmarkChartsProps) => {
   ).toFixed(0);
 
   return (
-    <div className="border border-neutral-800 rounded-lg p-6">
+    <div className="border border-border rounded-lg p-6">
       <div className="relative">
         <div className="flex items-center gap-3">
           <div className="w-20 shrink-0" />
@@ -185,7 +194,7 @@ export const BenchmarkChartsTweet = ({ results }: BenchmarkChartsProps) => {
             {gridLines.map((seconds) => (
               <div
                 key={seconds}
-                className="absolute top-0 border-l border-neutral-800"
+                className="absolute top-0 border-l border-border"
                 style={{
                   left: `${(seconds / maxSeconds) * 100}%`,
                   height: "calc(100% + 80px)",
@@ -218,7 +227,7 @@ export const BenchmarkChartsTweet = ({ results }: BenchmarkChartsProps) => {
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="w-20 text-right text-xs font-medium text-neutral-400 shrink-0">
+            <div className="w-20 text-right text-xs font-medium text-muted-foreground shrink-0">
               Claude Code
             </div>
             <AnimatedBar
@@ -244,7 +253,7 @@ export const BenchmarkChartsTweet = ({ results }: BenchmarkChartsProps) => {
             {gridLines.map((seconds) => (
               <span
                 key={seconds}
-                className="absolute text-[10px] text-neutral-600 -translate-x-1/2"
+                className="absolute text-[10px] text-muted-foreground/60 -translate-x-1/2"
                 style={{ left: `${(seconds / maxSeconds) * 100}%` }}
               >
                 {seconds}s
@@ -254,22 +263,22 @@ export const BenchmarkChartsTweet = ({ results }: BenchmarkChartsProps) => {
         </div>
       </div>
 
-      <p className="mt-3 text-[10px] text-neutral-600 italic">
+      <p className="mt-3 text-[10px] text-muted-foreground/60 italic">
         Above: avg time for Claude Code to complete 20 UI tasks on a{" "}
         <a
           href="https://ui.shadcn.com"
           target="_blank"
           rel="noopener noreferrer"
-          className="underline underline-offset-2 hover:text-neutral-400"
+          className="underline underline-offset-2 hover:text-muted-foreground"
         >
           shadcn/ui
         </a>{" "}
         dashboard.{" "}
         <a
-          href="https://github.com/aidenybai/react-grab/tree/main/packages/benchmarks"
+          href="https://github.com/aidenybai/react-bench"
           target="_blank"
           rel="noopener noreferrer"
-          className="underline underline-offset-2 hover:text-neutral-400"
+          className="underline underline-offset-2 hover:text-muted-foreground"
         >
           More info
         </a>
@@ -330,7 +339,7 @@ const AnimatedBarTreatment = ({
         <span className="text-sm font-bold text-emerald-400">
           {durationSpeedup}× faster
         </span>
-        <span className="text-[10px] text-neutral-500">
+        <span className="text-[10px] text-muted-foreground">
           ({costLabel} ↓{costChange}%)
         </span>
       </span>
@@ -367,7 +376,7 @@ const LiveCounter = ({ targetSeconds, maxSeconds }: LiveCounterProps) => {
   return (
     <div className="relative h-5 flex-1">
       <span
-        className="absolute top-0 -translate-x-1/2 text-[10px] tabular-nums text-neutral-400"
+        className="absolute top-0 -translate-x-1/2 text-[10px] tabular-nums text-muted-foreground"
         style={{ left: `${currentWidth}%` }}
       >
         {elapsedSeconds.toFixed(1)}s
@@ -379,8 +388,10 @@ const LiveCounter = ({ targetSeconds, maxSeconds }: LiveCounterProps) => {
 LiveCounter.displayName = "LiveCounter";
 
 export const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
-  const controlResults = results.filter((r) => r.type === "control");
-  const treatmentResults = results.filter((r) => r.type === "treatment");
+  const controlResults = results.filter((result) => result.type === "control");
+  const treatmentResults = results.filter(
+    (result) => result.type === "treatment",
+  );
 
   if (controlResults.length === 0 || treatmentResults.length === 0) {
     return null;
@@ -390,11 +401,11 @@ export const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
   const treatmentStats = calculateStats(treatmentResults);
 
   const controlTotalCost = controlResults.reduce(
-    (sum, r) => sum + r.costUsd,
+    (sum, result) => sum + result.costUsd,
     0,
   );
   const treatmentTotalCost = treatmentResults.reduce(
-    (sum, r) => sum + r.costUsd,
+    (sum, result) => sum + result.costUsd,
     0,
   );
 
@@ -461,7 +472,7 @@ export const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
     <div>
       <div className="space-y-8">
         <div style={{ height: BENCHMARK_CHART_HEIGHT_PX }} className="w-full">
-          <div className="mb-4 text-sm text-neutral-500 text-center">
+          <div className="mb-4 text-sm text-muted-foreground text-center">
             Normalized to Control = 100%
           </div>
           <ResponsiveContainer width="100%" height="100%">
@@ -499,13 +510,16 @@ export const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
                 wrapperStyle={{ paddingBottom: "10px", fontSize: "12px" }}
                 content={({ payload }) => (
                   <div className="flex items-center justify-center gap-4">
-                    {payload?.map((entry, index) => (
-                      <div key={index} className="flex items-center gap-2">
+                    {payload?.map((legendEntry) => (
+                      <div
+                        key={String(legendEntry.value)}
+                        className="flex items-center gap-2"
+                      >
                         <div
                           className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: entry.color }}
+                          style={{ backgroundColor: legendEntry.color }}
                         />
-                        {entry.value === "React Grab" ? (
+                        {legendEntry.value === "React Grab" ? (
                           <div className="flex items-center gap-1.5">
                             <Image
                               src="/logo.svg"
@@ -518,11 +532,11 @@ export const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
                               className="text-xs"
                               style={{ color: BENCHMARK_TREATMENT_COLOR }}
                             >
-                              {entry.value}
+                              {legendEntry.value}
                             </span>
                           </div>
                         ) : (
-                          <span className="text-xs">{entry.value}</span>
+                          <span className="text-xs">{legendEntry.value}</span>
                         )}
                       </div>
                     ))}
@@ -568,14 +582,14 @@ export const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
         <div className="overflow-x-auto flex justify-center">
           <table className="text-sm border-collapse max-w-2xl w-full">
             <thead>
-              <tr className="border-b border-[#2a2a2a]">
-                <th className="text-left py-2 px-4 text-xs font-medium text-neutral-500 uppercase tracking-wider">
+              <tr className="border-b border-border">
+                <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
                   Metric
                 </th>
-                <th className="text-left py-2 px-4 text-xs font-medium text-neutral-500 uppercase tracking-wider">
+                <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
                   Control
                 </th>
-                <th className="text-left py-2 px-4 text-xs font-medium text-neutral-500 uppercase tracking-wider bg-[#1f1f1f]/50 rounded-tr-md">
+                <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider bg-popover/50 rounded-tr-md">
                   <div className="flex items-center gap-1.5">
                     <Image
                       src="/logo.svg"
@@ -591,19 +605,19 @@ export const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#2a2a2a]">
+            <tbody className="divide-y divide-border">
               {metrics.map((metric) => (
                 <tr
                   key={metric.name}
-                  className="hover:bg-[#1a1a1a] transition-colors group"
+                  className="hover:bg-popover transition-colors group"
                 >
-                  <td className="py-2 px-4 font-medium text-neutral-300 text-sm group-hover:text-white transition-colors">
+                  <td className="py-2 px-4 font-medium text-foreground/80 text-sm group-hover:text-foreground transition-colors">
                     {metric.name}
                   </td>
-                  <td className="py-2 px-4 text-neutral-400 tabular-nums text-sm">
+                  <td className="py-2 px-4 text-muted-foreground tabular-nums text-sm">
                     {metric.control}
                   </td>
-                  <td className="py-2 px-4 text-neutral-300 tabular-nums bg-[#1f1f1f]/50 text-sm group-hover:bg-[#1f1f1f] transition-colors">
+                  <td className="py-2 px-4 text-foreground/80 tabular-nums bg-popover/50 text-sm group-hover:bg-popover transition-colors">
                     {metric.treatment}
                     <span
                       className={`ml-2 text-xs font-medium ${metric.isImprovement ? "text-green-400" : "text-red-400"}`}
