@@ -12,7 +12,7 @@ import {
   NEXT_PAGES_ROUTER_SCRIPT_WITH_AGENT,
   SCRIPT_IMPORT,
   TANSTACK_EFFECT_WITH_AGENT,
-  VITE_SCRIPT_WITH_AGENT,
+  VITE_IMPORT_WITH_AGENT,
   WEBPACK_IMPORT_WITH_AGENT,
   type AgentIntegration,
 } from "./templates.js";
@@ -244,59 +244,7 @@ const addAgentToExistingNextApp = (
   };
 };
 
-const addAgentToExistingVite = (
-  originalContent: string,
-  agent: AgentIntegration,
-  filePath: string,
-): TransformResult => {
-  if (agent === "none") {
-    return {
-      success: true,
-      filePath,
-      message: "React Grab is already configured",
-      noChanges: true,
-    };
-  }
-
-  const agentPackage = `@react-grab/${agent}`;
-  if (originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is already configured`,
-      noChanges: true,
-    };
-  }
-
-  const agentImport = `import("${agentPackage}/client");`;
-  const reactGrabImportMatch = originalContent.match(
-    /import\s*\(\s*["']react-grab["']\s*\);?/,
-  );
-
-  if (reactGrabImportMatch) {
-    const matchedText = reactGrabImportMatch[0];
-    const hasSemicolon = matchedText.endsWith(";");
-    const newContent = originalContent.replace(
-      matchedText,
-      `${hasSemicolon ? matchedText.slice(0, -1) : matchedText};\n        ${agentImport}`,
-    );
-    return {
-      success: true,
-      filePath,
-      message: `Add ${agent} agent`,
-      originalContent,
-      newContent,
-    };
-  }
-
-  return {
-    success: false,
-    filePath,
-    message: "Could not find React Grab import to add agent after",
-  };
-};
-
-const addAgentToExistingWebpack = (
+const addAgentToExistingImport = (
   originalContent: string,
   agent: AgentIntegration,
   filePath: string,
@@ -404,6 +352,7 @@ const transformNextAppRouter = (
   projectRoot: string,
   agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
+  force: boolean = false,
 ): TransformResult => {
   const layoutPath = findLayoutFile(projectRoot);
 
@@ -421,11 +370,11 @@ const transformNextAppRouter = (
   const hasReactGrabInInstrumentationFile =
     hasReactGrabInInstrumentation(projectRoot);
 
-  if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
+  if (!force && hasReactGrabInFile && reactGrabAlreadyConfigured) {
     return addAgentToExistingNextApp(originalContent, agent, layoutPath);
   }
 
-  if (hasReactGrabInFile || hasReactGrabInInstrumentationFile) {
+  if (!force && (hasReactGrabInFile || hasReactGrabInInstrumentationFile)) {
     return {
       success: true,
       filePath: layoutPath,
@@ -482,6 +431,7 @@ const transformNextPagesRouter = (
   projectRoot: string,
   agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
+  force: boolean = false,
 ): TransformResult => {
   const documentPath = findDocumentFile(projectRoot);
 
@@ -518,11 +468,11 @@ const transformNextPagesRouter = (
   const hasReactGrabInInstrumentationFile =
     hasReactGrabInInstrumentation(projectRoot);
 
-  if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
+  if (!force && hasReactGrabInFile && reactGrabAlreadyConfigured) {
     return addAgentToExistingNextApp(originalContent, agent, documentPath);
   }
 
-  if (hasReactGrabInFile || hasReactGrabInInstrumentationFile) {
+  if (!force && (hasReactGrabInFile || hasReactGrabInInstrumentationFile)) {
     return {
       success: true,
       filePath: documentPath,
@@ -565,51 +515,69 @@ const transformNextPagesRouter = (
   };
 };
 
+const checkExistingInstallation = (
+  filePath: string,
+  agent: AgentIntegration,
+  reactGrabAlreadyConfigured: boolean,
+): TransformResult | null => {
+  const content = readFileSync(filePath, "utf-8");
+  if (!hasReactGrabCode(content)) return null;
+
+  if (reactGrabAlreadyConfigured) {
+    return addAgentToExistingImport(content, agent, filePath);
+  }
+  return {
+    success: true,
+    filePath,
+    message: "React Grab is already installed in this file",
+    noChanges: true,
+  };
+};
+
 const transformVite = (
   projectRoot: string,
   agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
+  force: boolean = false,
 ): TransformResult => {
-  const indexPath = findIndexHtml(projectRoot);
+  const entryPath = findEntryFile(projectRoot);
 
-  if (!indexPath) {
+  if (!force) {
+    const indexPath = findIndexHtml(projectRoot);
+    if (indexPath) {
+      const existingResult = checkExistingInstallation(
+        indexPath,
+        agent,
+        reactGrabAlreadyConfigured,
+      );
+      if (existingResult) return existingResult;
+    }
+  }
+
+  if (!entryPath) {
     return {
       success: false,
       filePath: "",
-      message: "Could not find index.html",
+      message: "Could not find entry file (src/index.tsx, src/main.tsx, etc.)",
     };
   }
 
-  const originalContent = readFileSync(indexPath, "utf-8");
-  let newContent = originalContent;
-  const hasReactGrabInFile = hasReactGrabCode(originalContent);
-
-  if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
-    return addAgentToExistingVite(originalContent, agent, indexPath);
-  }
-
-  if (hasReactGrabInFile) {
-    return {
-      success: true,
-      filePath: indexPath,
-      message: "React Grab is already installed in this file",
-      noChanges: true,
-    };
-  }
-
-  const scriptBlock = VITE_SCRIPT_WITH_AGENT(agent);
-
-  const headMatch = newContent.match(/<head[^>]*>/i);
-  if (headMatch) {
-    newContent = newContent.replace(
-      headMatch[0],
-      `${headMatch[0]}\n    ${scriptBlock}`,
+  if (!force) {
+    const existingResult = checkExistingInstallation(
+      entryPath,
+      agent,
+      reactGrabAlreadyConfigured,
     );
+    if (existingResult) return existingResult;
   }
+
+  const originalContent = readFileSync(entryPath, "utf-8");
+  const importBlock = VITE_IMPORT_WITH_AGENT(agent);
+  const newContent = `${importBlock}\n\n${originalContent}`;
 
   return {
     success: true,
-    filePath: indexPath,
+    filePath: entryPath,
     message:
       "Add React Grab" + (agent !== "none" ? ` with ${agent} agent` : ""),
     originalContent,
@@ -621,6 +589,7 @@ const transformWebpack = (
   projectRoot: string,
   agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
+  force: boolean = false,
 ): TransformResult => {
   const entryPath = findEntryFile(projectRoot);
 
@@ -632,22 +601,16 @@ const transformWebpack = (
     };
   }
 
+  if (!force) {
+    const existingResult = checkExistingInstallation(
+      entryPath,
+      agent,
+      reactGrabAlreadyConfigured,
+    );
+    if (existingResult) return existingResult;
+  }
+
   const originalContent = readFileSync(entryPath, "utf-8");
-  const hasReactGrabInFile = hasReactGrabCode(originalContent);
-
-  if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
-    return addAgentToExistingWebpack(originalContent, agent, entryPath);
-  }
-
-  if (hasReactGrabInFile) {
-    return {
-      success: true,
-      filePath: entryPath,
-      message: "React Grab is already installed in this file",
-      noChanges: true,
-    };
-  }
-
   const importBlock = WEBPACK_IMPORT_WITH_AGENT(agent);
   const newContent = `${importBlock}\n\n${originalContent}`;
 
@@ -665,6 +628,7 @@ const transformTanStack = (
   projectRoot: string,
   agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
+  force: boolean = false,
 ): TransformResult => {
   const rootPath = findTanStackRootFile(projectRoot);
 
@@ -688,11 +652,11 @@ const transformTanStack = (
   let newContent = originalContent;
   const hasReactGrabInFile = hasReactGrabCode(originalContent);
 
-  if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
+  if (!force && hasReactGrabInFile && reactGrabAlreadyConfigured) {
     return addAgentToExistingTanStack(originalContent, agent, rootPath);
   }
 
-  if (hasReactGrabInFile) {
+  if (!force && hasReactGrabInFile) {
     return {
       success: true,
       filePath: rootPath,
@@ -762,30 +726,50 @@ export const previewTransform = (
   nextRouterType: NextRouterType,
   agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean = false,
+  force: boolean = false,
 ): TransformResult => {
+  const resolvedAgent: AgentIntegration = agent === "mcp" ? "none" : agent;
+
   switch (framework) {
     case "next":
       if (nextRouterType === "app") {
         return transformNextAppRouter(
           projectRoot,
-          agent,
+          resolvedAgent,
           reactGrabAlreadyConfigured,
+          force,
         );
       }
       return transformNextPagesRouter(
         projectRoot,
-        agent,
+        resolvedAgent,
         reactGrabAlreadyConfigured,
+        force,
       );
 
     case "vite":
-      return transformVite(projectRoot, agent, reactGrabAlreadyConfigured);
+      return transformVite(
+        projectRoot,
+        resolvedAgent,
+        reactGrabAlreadyConfigured,
+        force,
+      );
 
     case "tanstack":
-      return transformTanStack(projectRoot, agent, reactGrabAlreadyConfigured);
+      return transformTanStack(
+        projectRoot,
+        resolvedAgent,
+        reactGrabAlreadyConfigured,
+        force,
+      );
 
     case "webpack":
-      return transformWebpack(projectRoot, agent, reactGrabAlreadyConfigured);
+      return transformWebpack(
+        projectRoot,
+        resolvedAgent,
+        reactGrabAlreadyConfigured,
+        force,
+      );
 
     default:
       return {
@@ -871,6 +855,8 @@ const AGENT_PACKAGES: Record<string, string> = {
   codex: "@react-grab/codex@latest",
   gemini: "@react-grab/gemini@latest",
   amp: "@react-grab/amp@latest",
+  droid: "@react-grab/droid@latest",
+  copilot: "@react-grab/copilot@latest",
 };
 
 export const getAgentPrefix = (
@@ -1101,8 +1087,17 @@ const findReactGrabFile = (
         return findLayoutFile(projectRoot);
       }
       return findDocumentFile(projectRoot);
-    case "vite":
-      return findIndexHtml(projectRoot);
+    case "vite": {
+      const entryFile = findEntryFile(projectRoot);
+      if (entryFile && hasReactGrabCode(readFileSync(entryFile, "utf-8"))) {
+        return entryFile;
+      }
+      const indexHtml = findIndexHtml(projectRoot);
+      if (indexHtml && hasReactGrabCode(readFileSync(indexHtml, "utf-8"))) {
+        return indexHtml;
+      }
+      return entryFile;
+    }
     case "tanstack":
       return findTanStackRootFile(projectRoot);
     case "webpack":

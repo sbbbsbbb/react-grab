@@ -5,18 +5,14 @@ import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { SelectionLabel } from "react-grab/src/components/selection-label/index.js";
 import { ContextMenu } from "react-grab/src/components/context-menu.js";
 import { ToolbarContent } from "react-grab/src/components/toolbar/toolbar-content.js";
-import { HistoryDropdown } from "react-grab/src/components/history-dropdown.js";
-import {
-  IconInbox,
-  IconInboxUnread,
-} from "react-grab/src/components/icons/icon-inbox.js";
+import { CommentsDropdown } from "react-grab/src/components/comments-dropdown.js";
 import type {
   OverlayBounds,
   SelectionLabelStatus,
-  HistoryItem,
+  CommentItem,
 } from "react-grab/src/types.js";
 
-type ComponentType = "label" | "context-menu" | "toolbar" | "history-dropdown";
+type ComponentType = "label" | "context-menu" | "toolbar" | "comments-dropdown";
 
 interface DesignSystemStateProps {
   tagName?: string;
@@ -24,7 +20,7 @@ interface DesignSystemStateProps {
   elementsCount?: number;
   status?: SelectionLabelStatus;
   hasAgent?: boolean;
-  isAgentConnected?: boolean;
+
   isPromptMode?: boolean;
   inputValue?: string;
   replyToPrompt?: string;
@@ -45,13 +41,11 @@ interface DesignSystemStateProps {
   hasOnRetry?: boolean;
   hasOnAcknowledge?: boolean;
   isToolbarActive?: boolean;
-  isToolbarCommentMode?: boolean;
   isToolbarEnabled?: boolean;
   isToolbarCollapsed?: boolean;
   toolbarSnapEdge?: "top" | "bottom" | "left" | "right";
-  toolbarHistoryItemCount?: number;
-  toolbarHasUnreadHistoryItems?: boolean;
-  historyItems?: HistoryItem[];
+  toolbarCommentItemCount?: number;
+  commentItems?: CommentItem[];
 }
 
 interface AnimationFrame {
@@ -208,7 +202,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Panel",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: false,
     },
   },
 
@@ -223,7 +216,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Card",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "",
     },
@@ -238,7 +230,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Form",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "make the button larger",
     },
@@ -253,7 +244,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Text",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "now make it blue",
       replyToPrompt: "make the button larger",
@@ -269,7 +259,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Container",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue:
         "make the button bigger and change the background color to a nice gradient from blue to purple",
@@ -285,7 +274,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Submit",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "also add rounded corners",
       replyToPrompt:
@@ -331,7 +319,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Section",
       status: "copying",
       hasAgent: true,
-      isAgentConnected: true,
       inputValue: "add form validation",
       statusText: "Thinking…",
     },
@@ -359,7 +346,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "LoginForm",
       status: "copying",
       hasAgent: true,
-      isAgentConnected: true,
       inputValue: "add validation",
       statusText: "Applying changes…",
     },
@@ -374,7 +360,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "DataTable",
       status: "copying",
       hasAgent: true,
-      isAgentConnected: true,
       inputValue: "make columns sortable",
       statusText: "Analyzing…",
     },
@@ -389,7 +374,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Modal",
       status: "copying",
       hasAgent: true,
-      isAgentConnected: true,
       inputValue:
         "add a close button in the top right corner with an X icon and make it dismiss the modal when clicked",
       statusText: "Thinking…",
@@ -405,7 +389,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "InteractiveDataVisualizationChart",
       status: "copying",
       hasAgent: true,
-      isAgentConnected: true,
       inputValue: "add tooltips",
       statusText: "Applying…",
     },
@@ -436,7 +419,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Footer",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Applied changes",
       supportsUndo: true,
     },
@@ -451,7 +433,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Sidebar",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Done",
       supportsUndo: true,
       supportsFollowUp: true,
@@ -467,7 +448,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Badge",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Applied",
       hasOnDismiss: false,
     },
@@ -482,7 +462,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "ListItem",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Changes saved",
       supportsUndo: false,
     },
@@ -497,7 +476,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Widget",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Updated",
       supportsUndo: true,
       showMoreOptions: true,
@@ -513,7 +491,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Hero",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Ready",
       supportsUndo: true,
       dismissButtonText: "Accept",
@@ -529,7 +506,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "TopBar",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Done",
       supportsUndo: true,
       supportsFollowUp: true,
@@ -548,7 +524,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "VeryLongComponentNameThatShouldTruncateInTheUI",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "",
     },
@@ -563,7 +538,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "SearchForm",
       status: "copying",
       hasAgent: true,
-      isAgentConnected: true,
       inputValue: "add validation",
       statusText: "Analyzing component structure and dependencies…",
     },
@@ -578,7 +552,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Card",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "and also fix the spacing",
       replyToPrompt:
@@ -595,7 +568,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "HeroSection",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Successfully applied 5 changes across 3 files",
       supportsUndo: true,
       supportsFollowUp: true,
@@ -611,7 +583,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Navbar",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Done",
       supportsUndo: true,
       supportsFollowUp: true,
@@ -629,7 +600,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Dashboard",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Applied changes",
       supportsUndo: true,
       supportsFollowUp: true,
@@ -647,7 +617,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "I",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "",
     },
@@ -662,7 +631,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Card2024V2",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "update the styles",
     },
@@ -829,7 +797,7 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
     props: {
       isToolbarActive: true,
       isToolbarEnabled: true,
-      toolbarHistoryItemCount: 3,
+      toolbarCommentItemCount: 3,
     },
   },
   {
@@ -850,17 +818,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
     props: {
       isToolbarActive: true,
       isToolbarEnabled: false,
-    },
-  },
-  {
-    id: "toolbar-comment-mode",
-    label: "Toolbar (Comment Mode)",
-    description: "Comment selection mode active",
-    component: "toolbar",
-    props: {
-      isToolbarActive: true,
-      isToolbarCommentMode: true,
-      isToolbarEnabled: true,
     },
   },
   {
@@ -912,272 +869,253 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
     },
   },
   {
-    id: "toolbar-history-read",
-    label: "Toolbar (History Read)",
-    description: "Inbox icon, no unread items",
+    id: "toolbar-with-comments",
+    label: "Toolbar (With Comments)",
+    description: "Comments badge visible with item count",
     component: "toolbar",
     props: {
       isToolbarActive: true,
       isToolbarEnabled: true,
-      toolbarHistoryItemCount: 5,
-      toolbarHasUnreadHistoryItems: false,
-    },
-  },
-  {
-    id: "toolbar-history-unread",
-    label: "Toolbar (History Unread)",
-    description: "Inbox icon with unread indicator",
-    component: "toolbar",
-    props: {
-      isToolbarActive: true,
-      isToolbarEnabled: true,
-      toolbarHistoryItemCount: 3,
-      toolbarHasUnreadHistoryItems: true,
+      toolbarCommentItemCount: 3,
     },
   },
 
   // ══════════════════════════════════════════════════════════════════════════
-  // HISTORY DROPDOWN STATES
+  // COMMENTS DROPDOWN STATES
   // ══════════════════════════════════════════════════════════════════════════
   {
-    id: "history-empty",
-    label: "History (Empty)",
+    id: "comments-empty",
+    label: "Comments (Empty)",
     description: "No copied elements yet",
-    component: "history-dropdown",
+    component: "comments-dropdown",
     props: {
-      historyItems: [],
+      commentItems: [],
     },
   },
   {
-    id: "history-single-item",
-    label: "History (Single Item)",
+    id: "comments-single-item",
+    label: "Comments (Single Item)",
     description: "One copied element",
-    component: "history-dropdown",
+    component: "comments-dropdown",
     props: {
-      historyItems: [
+      commentItems: [
         {
-          id: "history-1",
+          id: "comment-1",
           content: "<Button />",
           elementName: "Button",
           tagName: "button",
           componentName: "Button",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 30_000,
         },
       ],
     },
   },
   {
-    id: "history-multiple-items",
-    label: "History (Multiple Items)",
+    id: "comments-multiple-items",
+    label: "Comments (Multiple Items)",
     description: "Several copied elements",
-    component: "history-dropdown",
+    component: "comments-dropdown",
     props: {
-      historyItems: [
+      commentItems: [
         {
-          id: "history-1",
+          id: "comment-1",
           content: "<Header />",
           elementName: "Header",
           tagName: "header",
           componentName: "Header",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 15_000,
         },
         {
-          id: "history-2",
+          id: "comment-2",
           content: "<Navigation />",
           elementName: "Navigation",
           tagName: "nav",
           componentName: "Navigation",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 120_000,
         },
         {
-          id: "history-3",
+          id: "comment-3",
           content: "<Footer />",
           elementName: "Footer",
           tagName: "footer",
           componentName: "Footer",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 3_600_000,
         },
       ],
     },
   },
   {
-    id: "history-with-comments",
-    label: "History (With Comments)",
+    id: "comments-with-annotations",
+    label: "Comments (With Annotations)",
     description: "Items with comment annotations",
-    component: "history-dropdown",
+    component: "comments-dropdown",
     props: {
-      historyItems: [
+      commentItems: [
         {
-          id: "history-1",
+          id: "comment-1",
           content: "<Card />",
           elementName: "Card",
           tagName: "div",
           componentName: "Card",
-          isComment: true,
           commentText: "make it bigger",
           timestamp: Date.now() - 10_000,
         },
         {
-          id: "history-2",
+          id: "comment-2",
           content: "<Sidebar />",
           elementName: "Sidebar",
           tagName: "aside",
           componentName: "Sidebar",
-          isComment: true,
           commentText: "add dark mode support",
           timestamp: Date.now() - 300_000,
         },
         {
-          id: "history-3",
+          id: "comment-3",
           content: "<Button />",
           elementName: "Button",
           tagName: "button",
           componentName: "Button",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 7_200_000,
         },
       ],
     },
   },
   {
-    id: "history-tag-only",
-    label: "History (Tag Only)",
+    id: "comments-tag-only",
+    label: "Comments (Tag Only)",
     description: "Items without component names",
-    component: "history-dropdown",
+    component: "comments-dropdown",
     props: {
-      historyItems: [
+      commentItems: [
         {
-          id: "history-1",
+          id: "comment-1",
           content: "<section />",
           elementName: "section",
           tagName: "section",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 60_000,
         },
         {
-          id: "history-2",
+          id: "comment-2",
           content: "<div />",
           elementName: "div",
           tagName: "div",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 180_000,
         },
       ],
     },
   },
   {
-    id: "history-long-names",
-    label: "History (Long Names)",
+    id: "comments-long-names",
+    label: "Comments (Long Names)",
     description: "Long component names truncation",
-    component: "history-dropdown",
+    component: "comments-dropdown",
     props: {
-      historyItems: [
+      commentItems: [
         {
-          id: "history-1",
+          id: "comment-1",
           content: "<InteractiveDataVisualizationChart />",
           elementName: "InteractiveDataVisualizationChart",
           tagName: "div",
           componentName: "InteractiveDataVisualizationChart",
-          isComment: true,
           commentText: "add tooltips on hover with data values and percentage",
           timestamp: Date.now() - 5_000,
         },
         {
-          id: "history-2",
+          id: "comment-2",
           content: "<SuperLongComponentNameWrapper />",
           elementName: "SuperLongComponentNameWrapper",
           tagName: "custom-interactive-element",
           componentName: "SuperLongComponentNameWrapper",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 86_400_000,
         },
       ],
     },
   },
   {
-    id: "history-many-items",
-    label: "History (Many Items)",
+    id: "comments-many-items",
+    label: "Comments (Many Items)",
     description: "Scrollable list with many items",
-    component: "history-dropdown",
+    component: "comments-dropdown",
     props: {
-      historyItems: [
+      commentItems: [
         {
-          id: "history-1",
+          id: "comment-1",
           content: "<Header />",
           elementName: "Header",
           tagName: "header",
           componentName: "Header",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 10_000,
         },
         {
-          id: "history-2",
+          id: "comment-2",
           content: "<Navigation />",
           elementName: "Navigation",
           tagName: "nav",
           componentName: "Navigation",
-          isComment: true,
           commentText: "make it sticky",
           timestamp: Date.now() - 60_000,
         },
         {
-          id: "history-3",
+          id: "comment-3",
           content: "<Card />",
           elementName: "Card",
           tagName: "div",
           componentName: "Card",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 300_000,
         },
         {
-          id: "history-4",
+          id: "comment-4",
           content: "<Button />",
           elementName: "Button",
           tagName: "button",
           componentName: "Button",
-          isComment: true,
           commentText: "increase padding",
           timestamp: Date.now() - 600_000,
         },
         {
-          id: "history-5",
+          id: "comment-5",
           content: "<Footer />",
           elementName: "Footer",
           tagName: "footer",
           componentName: "Footer",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 1_800_000,
         },
         {
-          id: "history-6",
+          id: "comment-6",
           content: "<Sidebar />",
           elementName: "Sidebar",
           tagName: "aside",
           componentName: "Sidebar",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 3_600_000,
         },
         {
-          id: "history-7",
+          id: "comment-7",
           content: "<Modal />",
           elementName: "Modal",
           tagName: "dialog",
           componentName: "Modal",
-          isComment: true,
           commentText: "add animation",
           timestamp: Date.now() - 7_200_000,
         },
         {
-          id: "history-8",
+          id: "comment-8",
           content: "<Form />",
           elementName: "Form",
           tagName: "form",
           componentName: "Form",
-          isComment: false,
+          commentText: "",
           timestamp: Date.now() - 43_200_000,
         },
       ],
@@ -1242,7 +1180,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Card",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "",
     },
@@ -1253,7 +1190,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "",
         },
@@ -1265,7 +1201,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "make it",
         },
@@ -1277,7 +1212,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "make it bigger",
         },
@@ -1289,7 +1223,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "copying",
           hasAgent: true,
-          isAgentConnected: true,
           inputValue: "make it bigger",
           statusText: "Thinking…",
         },
@@ -1301,7 +1234,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "copying",
           hasAgent: true,
-          isAgentConnected: true,
           inputValue: "make it bigger",
           statusText: "Applying changes…",
         },
@@ -1313,7 +1245,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "copied",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Applied changes",
           supportsUndo: true,
           supportsFollowUp: true,
@@ -1377,7 +1308,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Header",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "change color",
     },
@@ -1388,7 +1318,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Header",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "change color",
         },
@@ -1411,7 +1340,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Header",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "change color",
         },
@@ -1429,7 +1357,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Section",
       status: "copying",
       hasAgent: true,
-      isAgentConnected: true,
       inputValue: "add animation",
       statusText: "Thinking…",
     },
@@ -1440,7 +1367,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Section",
           status: "copying",
           hasAgent: true,
-          isAgentConnected: true,
           inputValue: "add animation",
           statusText: "Thinking…",
         },
@@ -1462,7 +1388,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Section",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "",
         },
@@ -1528,7 +1453,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Navbar",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Done",
       supportsUndo: true,
       supportsFollowUp: true,
@@ -1541,7 +1465,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Navbar",
           status: "copied",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Done",
           supportsUndo: true,
           supportsFollowUp: true,
@@ -1555,7 +1478,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Navbar",
           status: "copying",
           hasAgent: true,
-          isAgentConnected: true,
           inputValue: "also make it sticky",
           statusText: "Thinking…",
         },
@@ -1567,7 +1489,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Navbar",
           status: "copied",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Applied 2 changes",
           supportsUndo: true,
           supportsFollowUp: true,
@@ -1587,7 +1508,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Modal",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Applied changes",
       supportsUndo: true,
       showMoreOptions: true,
@@ -1599,7 +1519,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Modal",
           status: "copied",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Applied changes",
           supportsUndo: true,
           supportsFollowUp: true,
@@ -1613,7 +1532,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Modal",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "",
         },
@@ -1678,7 +1596,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Sidebar",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: true,
       isPromptMode: true,
       inputValue: "",
     },
@@ -1689,7 +1606,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Sidebar",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "",
         },
@@ -1701,7 +1617,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Sidebar",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "make it collapsible",
         },
@@ -1713,7 +1628,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Sidebar",
           status: "copying",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Thinking…",
         },
         durationMs: 2000,
@@ -1773,7 +1687,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Footer",
       status: "idle",
       hasAgent: true,
-      isAgentConnected: false,
     },
     animationSequence: [
       {
@@ -1782,7 +1695,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Footer",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: false,
         },
         durationMs: 2000,
       },
@@ -1792,7 +1704,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Footer",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "",
         },
@@ -2029,7 +1940,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Dashboard",
       status: "copying",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Starting…",
     },
     animationSequence: [
@@ -2039,7 +1949,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Dashboard",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "redesign the layout",
         },
@@ -2051,7 +1960,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Dashboard",
           status: "copying",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Analyzing…",
         },
         durationMs: 1500,
@@ -2062,7 +1970,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Dashboard",
           status: "copying",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Generating code…",
         },
         durationMs: 1500,
@@ -2073,7 +1980,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Dashboard",
           status: "copying",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Applying changes…",
         },
         durationMs: 1500,
@@ -2084,7 +1990,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Dashboard",
           status: "copied",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Done",
           supportsUndo: true,
           supportsFollowUp: true,
@@ -2104,7 +2009,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
       componentName: "Card",
       status: "copied",
       hasAgent: true,
-      isAgentConnected: true,
       statusText: "Done",
       supportsFollowUp: true,
       showMoreOptions: true,
@@ -2116,7 +2020,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "copied",
           hasAgent: true,
-          isAgentConnected: true,
           statusText: "Done",
           supportsUndo: true,
           supportsFollowUp: true,
@@ -2130,7 +2033,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "",
           previousPrompt: "make it bigger",
@@ -2144,7 +2046,6 @@ const DESIGN_SYSTEM_STATES: DesignSystemState[] = [
           componentName: "Card",
           status: "idle",
           hasAgent: true,
-          isAgentConnected: true,
           isPromptMode: true,
           inputValue: "also add shadow",
           previousPrompt: "make it bigger",
@@ -2630,7 +2531,7 @@ const StateCard = (props: StateCardProps) => {
           <Show
             when={
               props.state.component !== "toolbar" &&
-              props.state.component !== "history-dropdown"
+              props.state.component !== "comments-dropdown"
             }
           >
             <div
@@ -2651,7 +2552,6 @@ const StateCard = (props: StateCardProps) => {
               visible={true}
               status={currentProps().status}
               hasAgent={currentProps().hasAgent}
-              isAgentConnected={currentProps().isAgentConnected}
               isPromptMode={currentProps().isPromptMode}
               inputValue={currentProps().inputValue}
               replyToPrompt={currentProps().replyToPrompt}
@@ -2709,12 +2609,6 @@ const StateCard = (props: StateCardProps) => {
                   shortcut: "C",
                   onAction: () => {},
                 },
-                {
-                  id: "screenshot",
-                  label: "Screenshot",
-                  shortcut: "S",
-                  onAction: () => {},
-                },
                 { id: "copy-html", label: "Copy HTML", onAction: () => {} },
                 {
                   id: "open",
@@ -2738,43 +2632,16 @@ const StateCard = (props: StateCardProps) => {
           <Show when={props.state.component === "toolbar"}>
             <ToolbarContent
               isActive={currentProps().isToolbarActive ?? false}
-              isCommentMode={currentProps().isToolbarCommentMode ?? false}
               enabled={currentProps().isToolbarEnabled ?? true}
               isCollapsed={currentProps().isToolbarCollapsed}
               snapEdge={currentProps().toolbarSnapEdge}
-              historyButton={
-                <Show
-                  when={
-                    (currentProps().isToolbarEnabled ?? true) &&
-                    (currentProps().toolbarHistoryItemCount ?? 0) > 0
-                  }
-                >
-                  <div class="grid grid-cols-[1fr] opacity-100 transition-all duration-150 ease-out">
-                    <div class="relative overflow-visible min-w-0">
-                      <button class="contain-layout flex items-center justify-center cursor-pointer interactive-scale touch-hitbox mr-1.5">
-                        <Show
-                          when={currentProps().toolbarHasUnreadHistoryItems}
-                          fallback={
-                            <IconInbox
-                              size={14}
-                              class="text-[#B3B3B3] transition-colors"
-                            />
-                          }
-                        >
-                          <IconInboxUnread
-                            size={14}
-                            class="text-[#B3B3B3] transition-colors"
-                          />
-                        </Show>
-                      </button>
-                    </div>
-                  </div>
-                </Show>
+              isCommentsExpanded={
+                (currentProps().toolbarCommentItemCount ?? 0) > 0
               }
             />
           </Show>
 
-          <Show when={props.state.component === "history-dropdown"}>
+          <Show when={props.state.component === "comments-dropdown"}>
             <div
               style={{
                 position: "absolute",
@@ -2787,22 +2654,11 @@ const StateCard = (props: StateCardProps) => {
                 <ToolbarContent
                   isActive={true}
                   enabled={true}
-                  historyButton={
-                    <div class="grid grid-cols-[1fr] opacity-100 transition-all duration-150 ease-out">
-                      <div class="relative overflow-visible min-w-0">
-                        <button class="contain-layout flex items-center justify-center cursor-pointer interactive-scale touch-hitbox mr-1.5">
-                          <IconInbox
-                            size={14}
-                            class="text-[#B3B3B3] transition-colors"
-                          />
-                        </button>
-                      </div>
-                    </div>
-                  }
+                  isCommentsExpanded={true}
                 />
               </div>
             </div>
-            <HistoryDropdown
+            <CommentsDropdown
               position={
                 boundsAnchor()
                   ? {
@@ -2812,7 +2668,7 @@ const StateCard = (props: StateCardProps) => {
                     }
                   : null
               }
-              items={currentProps().historyItems ?? []}
+              items={currentProps().commentItems ?? []}
             />
           </Show>
         </Show>
@@ -3041,10 +2897,10 @@ const DesignSystemGrid = () => {
         !hasAnimation(state) &&
         matchesSearch(state),
     );
-  const historyDropdownStates = () =>
+  const commentsDropdownStates = () =>
     DESIGN_SYSTEM_STATES.filter(
       (state) =>
-        state.component === "history-dropdown" &&
+        state.component === "comments-dropdown" &&
         !hasAnimation(state) &&
         matchesSearch(state),
     );
@@ -3348,12 +3204,12 @@ const DesignSystemGrid = () => {
           </div>
         </Show>
 
-        {/* History Dropdown Section */}
-        <Show when={historyDropdownStates().length > 0}>
+        {/* Comments Dropdown Section */}
+        <Show when={commentsDropdownStates().length > 0}>
           <div style={{ padding: `${GAP_PX}px 24px` }}>
-            <span style={sectionTitleStyle()}>History Dropdown</span>
+            <span style={sectionTitleStyle()}>Comments Dropdown</span>
             <div style={gridStyle()}>
-              <For each={historyDropdownStates()}>
+              <For each={commentsDropdownStates()}>
                 {(state) => (
                   <StateCard
                     state={state}
@@ -3405,7 +3261,7 @@ const DesignSystemGrid = () => {
               labelStates().length +
               contextMenuStates().length +
               toolbarStates().length +
-              historyDropdownStates().length +
+              commentsDropdownStates().length +
               agentLabelStates().length ===
               0
           }

@@ -1,7 +1,12 @@
+import type { Position } from "../types.js";
 import {
   AUTO_SCROLL_EDGE_THRESHOLD_PX,
   AUTO_SCROLL_SPEED_PX,
 } from "../constants.js";
+import {
+  nativeCancelAnimationFrame,
+  nativeRequestAnimationFrame,
+} from "../utils/native-raf.js";
 
 interface AutoScrollDirection {
   top: boolean;
@@ -29,7 +34,7 @@ interface AutoScroller {
 }
 
 export const createAutoScroller = (
-  getMousePosition: () => { x: number; y: number },
+  getMousePosition: () => Position,
   shouldContinue: () => boolean,
 ): AutoScroller => {
   let animationId: number | null = null;
@@ -54,19 +59,15 @@ export const createAutoScroller = (
       direction.left ||
       direction.right
     ) {
-      animationId = requestAnimationFrame(scroll);
+      animationId = nativeRequestAnimationFrame(scroll);
     } else {
       animationId = null;
     }
   };
 
-  const start = () => {
-    scroll();
-  };
-
   const stop = () => {
     if (animationId !== null) {
-      cancelAnimationFrame(animationId);
+      nativeCancelAnimationFrame(animationId);
       animationId = null;
     }
   };
@@ -74,7 +75,7 @@ export const createAutoScroller = (
   const isActive = () => animationId !== null;
 
   return {
-    start,
+    start: scroll,
     stop,
     isActive,
   };

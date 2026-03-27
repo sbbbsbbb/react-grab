@@ -266,8 +266,9 @@ test.describe("Freeze Updates", () => {
 
       for (let i = 0; i < 3; i++) {
         await reactGrab.enterPromptMode("[data-testid='dynamic-element-1']");
-        await reactGrab.pressEscape();
-        await reactGrab.page.waitForTimeout(100);
+        await reactGrab.deactivate();
+        // HACK: allow freeze cleanup to fully propagate before next iteration
+        await reactGrab.page.waitForTimeout(300);
       }
 
       const getElementCount = async () => {

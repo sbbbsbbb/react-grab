@@ -114,16 +114,12 @@ export default function Document() {
 
 #### Vite
 
-Add to `index.html`:
+Add to your main entry file (e.g., `src/main.tsx`):
 
-```html
-<head>
-  <script type="module">
-    if (import.meta.env.DEV) {
-      import("react-grab");
-    }
-  </script>
-</head>
+```tsx
+if (import.meta.env.DEV) {
+  import("react-grab");
+}
 ```
 
 #### Webpack

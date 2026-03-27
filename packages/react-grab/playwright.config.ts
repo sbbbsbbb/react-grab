@@ -8,7 +8,7 @@ export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: process.env.CI ? 2 : 1,
   workers: process.env.CI ? 4 : undefined,
   timeout: 60_000,
   reporter: "html",
@@ -36,7 +36,7 @@ export default defineConfig({
     command: "pnpm --filter react-grab build && pnpm dev",
     url: "http://localhost:5175",
     reuseExistingServer: !process.env.CI,
-    cwd: path.resolve(__dirname, "../e2e-playground"),
+    cwd: path.resolve(__dirname, "../e2e-app"),
     timeout: 30000,
   },
 });

@@ -1,6 +1,7 @@
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 import type {
+  Position,
   AgentContext,
   AgentSession,
   AgentOptions,
@@ -18,6 +19,7 @@ import {
 import { createElementBounds } from "../../utils/create-element-bounds.js";
 import { isElementConnected } from "../../utils/is-element-connected.js";
 import { generateSnippet } from "../../utils/generate-snippet.js";
+import { recalculateSessionPosition } from "../../utils/recalculate-session-position.js";
 import { getNearestComponentName } from "../context.js";
 import {
   DISMISS_ANIMATION_BUFFER_MS,
@@ -25,11 +27,12 @@ import {
   RECENT_THRESHOLD_MS,
 } from "../../constants.js";
 import { getTagName } from "../../utils/get-tag-name.js";
+import { normalizeErrorMessage } from "../../utils/normalize-error.js";
 
 interface StartSessionParams {
   elements: Element[];
   prompt: string;
-  position: { x: number; y: number };
+  position: Position;
   selectionBounds: OverlayBounds[];
   sessionId?: string;
   agent?: AgentOptions;
@@ -126,8 +129,9 @@ export const createAgentManager = (
     return agentOptions;
   };
 
-  const isProcessing = (): boolean =>
-    Array.from(sessions().values()).some((session) => session.isStreaming);
+  const isProcessing = createMemo(() =>
+    Array.from(sessions().values()).some((session) => session.isStreaming),
+  );
 
   const executeSessionStream = async (
     session: AgentSession,
@@ -435,10 +439,10 @@ export const createAgentManager = (
         ? await hooks.transformAgentContext(contextWithSessionId, elements)
         : contextWithSessionId;
     } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Context transformation failed";
+      const errorMessage = normalizeErrorMessage(
+        error,
+        "Context transformation failed",
+      );
       const errorSession = updateSession(
         session,
         {
@@ -689,20 +693,11 @@ export const createAgentManager = (
         if (newBounds.length > 0) {
           const oldFirstBounds = session.selectionBounds[0];
           const newFirstBounds = newBounds[0];
-          let updatedPosition = session.position;
-
-          if (oldFirstBounds && newFirstBounds) {
-            const oldCenterX = oldFirstBounds.x + oldFirstBounds.width / 2;
-            const oldHalfWidth = oldFirstBounds.width / 2;
-            const offsetX = session.position.x - oldCenterX;
-            const offsetRatio = oldHalfWidth > 0 ? offsetX / oldHalfWidth : 0;
-            const newCenterX = newFirstBounds.x + newFirstBounds.width / 2;
-            const newHalfWidth = newFirstBounds.width / 2;
-            updatedPosition = {
-              ...session.position,
-              x: newCenterX + offsetRatio * newHalfWidth,
-            };
-          }
+          const updatedPosition = recalculateSessionPosition({
+            currentPosition: session.position,
+            previousBounds: oldFirstBounds,
+            nextBounds: newFirstBounds,
+          });
 
           updatedSessions.set(sessionId, {
             ...session,

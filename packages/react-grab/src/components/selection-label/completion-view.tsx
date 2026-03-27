@@ -1,11 +1,13 @@
-import { Show, createSignal, createEffect, onMount, onCleanup } from "solid-js";
+import { Show, createSignal, onMount, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
 import type { CompletionViewProps } from "../../types.js";
 import {
   FEEDBACK_DURATION_MS,
   FADE_DURATION_MS,
-  PANEL_STYLES,
+  IME_COMPOSING_KEY_CODE,
+  TEXTAREA_MAX_HEIGHT_PX,
 } from "../../constants.js";
+import { autoResizeTextarea } from "../../utils/auto-resize-textarea.js";
 import { confirmationFocusManager } from "../../utils/confirmation-focus-manager.js";
 import { isKeyboardEventTriggeredByInput } from "../../utils/is-keyboard-event-triggered-by-input.js";
 import { IconReply } from "../icons/icon-reply.jsx";
@@ -28,11 +30,9 @@ const MoreOptionsButton: Component<MoreOptionsButtonProps> = (props) => {
       class="flex items-center justify-center size-[18px] rounded-sm cursor-pointer bg-transparent hover:bg-black/10 text-black/30 hover:text-black border-none outline-none p-0 shrink-0 press-scale"
       // HACK: Native events with stopImmediatePropagation needed to block document-level handlers in the overlay system
       on:pointerdown={(event) => {
-        event.stopPropagation();
         event.stopImmediatePropagation();
       }}
       on:click={(event) => {
-        event.stopPropagation();
         event.stopImmediatePropagation();
         props.onClick();
       }}
@@ -49,15 +49,20 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
   let dismissTimeoutId: number | undefined;
   const [didCopy, setDidCopy] = createSignal(false);
   const [isFading, setIsFading] = createSignal(false);
-  const [displayStatusText, setDisplayStatusText] = createSignal(
-    props.statusText,
-  );
+  const displayStatusText = () => (didCopy() ? "Copied" : props.statusText);
   const [followUpInput, setFollowUpInput] = createSignal("");
+
+  const handleShowContextMenu = () => {
+    if (fadeTimeoutId !== undefined) window.clearTimeout(fadeTimeoutId);
+    if (dismissTimeoutId !== undefined) window.clearTimeout(dismissTimeoutId);
+    setIsFading(true);
+    props.onFadingChange?.(true);
+    props.onShowContextMenu?.();
+  };
 
   const handleAccept = () => {
     if (didCopy()) return;
     setDidCopy(true);
-    setDisplayStatusText("Copied");
     props.onCopyStateChange?.();
     fadeTimeoutId = window.setTimeout(() => {
       setIsFading(true);
@@ -76,7 +81,7 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
   };
 
   const handleInputKeyDown = (event: KeyboardEvent) => {
-    if (event.isComposing || event.keyCode === 229) {
+    if (event.isComposing || event.keyCode === IME_COMPOSING_KEY_CODE) {
       return;
     }
 
@@ -86,7 +91,6 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
     const isEscape = event.code === "Escape";
 
     if (!isUndoRedo) {
-      event.stopPropagation();
       event.stopImmediatePropagation();
     }
 
@@ -138,18 +142,12 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
     confirmationFocusManager.claim(instanceId);
   };
 
-  createEffect(() => {
-    if (!didCopy()) {
-      setDisplayStatusText(props.statusText);
-    }
-  });
-
   onMount(() => {
     confirmationFocusManager.claim(instanceId);
     window.addEventListener("keydown", handleKeyDown, { capture: true });
 
     if (props.supportsFollowUp && props.onFollowUpSubmit && inputRef) {
-      inputRef.focus();
+      inputRef.focus({ preventScroll: true });
     }
   });
 
@@ -165,7 +163,7 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
       data-react-grab-completion
       class={cn(
         "contain-layout shrink-0 flex flex-col justify-center items-end rounded-[10px] antialiased w-fit h-fit max-w-[280px] transition-opacity duration-100 ease-out [font-synthesis:none] [corner-shape:superellipse(1.25)]",
-        PANEL_STYLES,
+        "bg-white",
       )}
       style={{ opacity: isFading() ? 0 : 1 }}
       onPointerDown={handleFocus}
@@ -178,7 +176,7 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
           </span>
           <div class="contain-layout shrink-0 flex items-center gap-2 h-fit">
             <Show when={props.onShowContextMenu && !props.supportsFollowUp}>
-              <MoreOptionsButton onClick={() => props.onShowContextMenu?.()} />
+              <MoreOptionsButton onClick={handleShowContextMenu} />
             </Show>
             <Show when={props.supportsUndo && props.onUndo}>
               <button
@@ -219,7 +217,7 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
             {displayStatusText()}
           </span>
           <Show when={props.onShowContextMenu && !props.supportsFollowUp}>
-            <MoreOptionsButton onClick={() => props.onShowContextMenu?.()} />
+            <MoreOptionsButton onClick={handleShowContextMenu} />
           </Show>
         </div>
       </Show>
@@ -247,11 +245,14 @@ export const CompletionView: Component<CompletionViewProps> = (props) => {
               style={{
                 "field-sizing": "content",
                 "min-height": "16px",
-                "max-height": "95px",
+                "max-height": `${TEXTAREA_MAX_HEIGHT_PX}px`,
                 "scrollbar-width": "none",
               }}
               value={followUpInput()}
-              onInput={(event) => setFollowUpInput(event.target.value)}
+              onInput={(event) => {
+                autoResizeTextarea(event.target, TEXTAREA_MAX_HEIGHT_PX);
+                setFollowUpInput(event.target.value);
+              }}
               onKeyDown={handleInputKeyDown}
               placeholder="follow-up"
               rows={1}

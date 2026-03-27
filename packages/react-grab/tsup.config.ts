@@ -50,7 +50,7 @@ const DEFAULT_OPTIONS: Options = {
     ".css": "text",
   },
   minify: process.env.NODE_ENV === "production",
-  noExternal: ["clsx", "tailwind-merge", "solid-js", "bippy"],
+  noExternal: ["clsx", "solid-js", "bippy"],
   onSuccess: process.env.COPY ? "pbcopy < ./dist/index.global.js" : undefined,
   outDir: "./dist",
   sourcemap: false,
@@ -90,7 +90,7 @@ const browserBuildConfig: Options = {
 const libraryBuildConfig: Options = {
   ...DEFAULT_OPTIONS,
   clean: false,
-  entry: ["./src/index.ts", "./src/core/index.tsx"],
+  entry: ["./src/index.ts", "./src/core/index.tsx", "./src/primitives.ts"],
   format: ["cjs", "esm"],
   loader: {
     ".css": "text",
@@ -112,45 +112,4 @@ const libraryBuildConfig: Options = {
   ],
 };
 
-const reactBuildConfig: Options = {
-  banner: {
-    js: `"use client";\n${banner}`,
-  },
-  clean: false,
-  dts: true,
-  entry: ["./src/react.tsx"],
-  env: {
-    VERSION: version,
-  },
-  esbuildPlugins: [
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call -- babel is not typed
-    babel({
-      filter: /\.(tsx|jsx)$/,
-      config: {
-        presets: [
-          ["@babel/preset-typescript", { onlyRemoveTypeImports: true }],
-          "babel-preset-solid",
-        ],
-      },
-    }),
-  ],
-  external: ["react"],
-  format: ["cjs", "esm"],
-  loader: {
-    ".css": "text",
-  },
-  minify: false,
-  noExternal: ["bippy", "solid-js", "clsx", "tailwind-merge"],
-  outDir: "./dist",
-  platform: "neutral",
-  sourcemap: false,
-  splitting: false,
-  target: "esnext",
-  treeshake: false,
-};
-
-export default defineConfig([
-  browserBuildConfig,
-  libraryBuildConfig,
-  reactBuildConfig,
-]);
+export default defineConfig([browserBuildConfig, libraryBuildConfig]);

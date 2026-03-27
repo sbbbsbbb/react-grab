@@ -1,4 +1,4 @@
-import { LOGO_SVG } from "../constants.js";
+import { LOGO_SVG } from "./logo-svg.js";
 import { isExtensionContext } from "../utils/is-extension-context.js";
 
 export const logIntro = () => {
@@ -30,5 +30,6 @@ export const logIntro = () => {
         })
         .catch(() => null);
     }
+    // HACK: Entire intro log is best-effort; never block initialization
   } catch {}
 };

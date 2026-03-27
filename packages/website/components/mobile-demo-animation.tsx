@@ -1,29 +1,38 @@
 "use client";
 
-import { useState, useEffect, useRef, type ReactElement } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  type ReactElement,
+} from "react";
+import { useWebHaptics } from "web-haptics/react";
 import { cn } from "@/utils/cn";
-
-const ANIMATION_RESTART_DELAY_MS = 200;
-const SELECTION_PADDING_PX = 4;
-const DRAG_PADDING_PX = 6;
-const CURSOR_OFFSET_PX = 16;
+import {
+  VIBRATION_DURATION_MS,
+  TAP_FEEDBACK_DISPLAY_MS,
+  TAP_FEEDBACK_FADE_MS,
+  LABEL_OFFSET_BELOW_PX,
+  ANIMATION_RESTART_DELAY_MS,
+  SELECTION_PADDING_PX,
+  CURSOR_OFFSET_PX,
+  HINT_OVERLAY_DELAY_MS,
+  IDLE_RESTART_DELAY_MS,
+} from "@/constants";
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
-
-interface BoxState {
-  visible: boolean;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 interface Position {
   x: number;
   y: number;
   width: number;
   height: number;
+}
+
+interface BoxState extends Position {
+  visible: boolean;
 }
 
 const HIDDEN_BOX: BoxState = {
@@ -40,7 +49,6 @@ interface LabelState {
   y: number;
   componentName: string;
   tagName: string;
-  above?: boolean;
 }
 
 const HIDDEN_LABEL: LabelState = {
@@ -49,7 +57,6 @@ const HIDDEN_LABEL: LabelState = {
   y: 0,
   componentName: "",
   tagName: "",
-  above: false,
 };
 
 type LabelMode =
@@ -60,7 +67,15 @@ type LabelMode =
   | "commenting"
   | "submitted"
   | "fading";
-type CursorType = "default" | "crosshair" | "drag" | "grabbing";
+type CursorType = "default" | "crosshair" | "grabbing";
+
+interface HitElement {
+  position: Position;
+  name: string;
+  tag: string;
+}
+
+const METRIC_CARD_NAMES = ["RevenueCard", "UsersCard", "OrdersCard"];
 
 const ACTIVITY_DATA = [
   { label: "New signup", time: "2m ago", component: "SignupRow" },
@@ -75,6 +90,8 @@ const createSelectionBox = (position: Position, padding: number): BoxState => ({
   width: position.width + padding * 2,
   height: position.height + padding * 2,
 });
+
+const INITIAL_CURSOR_POSITION = { x: 150, y: 80 };
 
 const getElementCenter = (position: Position): { x: number; y: number } => ({
   x: position.x + position.width / 2,
@@ -105,7 +122,7 @@ const SubmitIcon = (): ReactElement => (
     className="shrink-0 text-white"
   >
     <path
-      d="M5 12h14M12 5l7 7-7 7"
+      d="M12 19V5M5 12l7-7 7 7"
       stroke="currentColor"
       strokeWidth="2.5"
       strokeLinecap="round"
@@ -284,36 +301,38 @@ const GrabbingCursor = (): ReactElement => (
 
 const CursorIcon = ({ type }: { type: CursorType }): ReactElement | null => {
   if (type === "default") return <DefaultCursor />;
-  if (type === "crosshair" || type === "drag") return <CrosshairCursor />;
+  if (type === "crosshair") return <CrosshairCursor />;
   if (type === "grabbing") return <GrabbingCursor />;
   return null;
 };
 
 export const MobileDemoAnimation = (): ReactElement => {
-  const [cursorPos, setCursorPos] = useState({ x: 150, y: 80 });
+  const { trigger: triggerHaptic } = useWebHaptics();
+  const [cursorPos, setCursorPos] = useState(INITIAL_CURSOR_POSITION);
   const [isCursorVisible, setIsCursorVisible] = useState(false);
   const [selectionBox, setSelectionBox] = useState<BoxState>(HIDDEN_BOX);
-  const [dragBox, setDragBox] = useState<BoxState>(HIDDEN_BOX);
-  const [isDragging, setIsDragging] = useState(false);
   const [successFlash, setSuccessFlash] = useState<BoxState>(HIDDEN_BOX);
   const [label, setLabel] = useState<LabelState>(HIDDEN_LABEL);
   const [labelMode, setLabelMode] = useState<LabelMode>("idle");
   const [cursorType, setCursorType] = useState<CursorType>("default");
   const [commentText, setCommentText] = useState("");
+  const [isHintVisible, setIsHintVisible] = useState(false);
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const metricCardRef = useRef<HTMLDivElement>(null);
+  const metricCardRefs = useRef<(HTMLDivElement | null)[]>([]);
   const metricValueRef = useRef<HTMLDivElement>(null);
   const exportButtonRef = useRef<HTMLDivElement>(null);
   const activityRowRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const fadingLabelTextRef = useRef<"Copied" | "Sent">("Sent");
+  const isCancelledRef = useRef(false);
+  const animationLoopRef = useRef<(() => void) | null>(null);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tapTimerInnerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
-  const metricCardPosition = useRef<Position>({
-    x: 0,
-    y: 0,
-    width: 0,
-    height: 0,
-  });
+  const metricCardPositions = useRef<(Position | null)[]>([]);
   const metricValuePosition = useRef<Position>({
     x: 0,
     y: 0,
@@ -348,62 +367,73 @@ export const MobileDemoAnimation = (): ReactElement => {
       };
     };
 
-    measureRelativePosition(metricCardRef.current, metricCardPosition);
     measureRelativePosition(metricValueRef.current, metricValuePosition);
     measureRelativePosition(exportButtonRef.current, exportButtonPosition);
 
-    activityRowPositions.current = activityRowRefs.current.map((ref) => {
-      if (!ref) return null;
-      const rect = ref.getBoundingClientRect();
-      return {
-        x: rect.left - containerRect.left,
-        y: rect.top - containerRect.top,
-        width: rect.width,
-        height: rect.height,
-      };
-    });
+    const measureRefArray = (
+      refs: (HTMLElement | null)[],
+    ): (Position | null)[] =>
+      refs.map((ref) => {
+        if (!ref) return null;
+        const rect = ref.getBoundingClientRect();
+        return {
+          x: rect.left - containerRect.left,
+          y: rect.top - containerRect.top,
+          width: rect.width,
+          height: rect.height,
+        };
+      });
+
+    metricCardPositions.current = measureRefArray(metricCardRefs.current);
+    activityRowPositions.current = measureRefArray(activityRowRefs.current);
   };
 
   useEffect(() => {
+    const visualViewport = window.visualViewport;
     const measurementTimer = setTimeout(measureElementPositions, 100);
     window.addEventListener("resize", measureElementPositions);
+    visualViewport?.addEventListener("resize", measureElementPositions);
+    visualViewport?.addEventListener("scroll", measureElementPositions);
     return () => {
       clearTimeout(measurementTimer);
       window.removeEventListener("resize", measureElementPositions);
+      visualViewport?.removeEventListener("resize", measureElementPositions);
+      visualViewport?.removeEventListener("scroll", measureElementPositions);
     };
   }, []);
 
   useEffect(() => {
-    let isCancelled = false;
-
-    const resetAnimationState = (): void => {
-      setCursorPos({ x: 150, y: 80 });
-      setIsCursorVisible(false);
-      setCursorType("default");
-      setSelectionBox(HIDDEN_BOX);
-      setDragBox(HIDDEN_BOX);
-      setIsDragging(false);
-      setSuccessFlash(HIDDEN_BOX);
-      setLabel(HIDDEN_LABEL);
-      setLabelMode("idle");
-      setCommentText("");
+    hintTimerRef.current = setTimeout(() => {
+      setIsHintVisible(true);
+    }, HINT_OVERLAY_DELAY_MS);
+    return () => {
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
     };
+  }, []);
 
+  const resetAnimationState = useCallback((): void => {
+    setCursorPos(INITIAL_CURSOR_POSITION);
+    setIsCursorVisible(false);
+    setCursorType("default");
+    setSelectionBox(HIDDEN_BOX);
+    setSuccessFlash(HIDDEN_BOX);
+    setLabel(HIDDEN_LABEL);
+    setLabelMode("idle");
+    setCommentText("");
+  }, []);
+
+  useEffect(() => {
     const displaySelectionLabel = (
       x: number,
       y: number,
       componentName: string,
       tagName: string,
-      above = false,
     ): void => {
-      setLabel({ visible: true, x, y, componentName, tagName, above });
+      setLabel({ visible: true, x, y, componentName, tagName });
       setLabelMode("selecting");
     };
 
-    const fadeOutSelectionLabel = async (
-      text: "Copied" | "Sent",
-    ): Promise<void> => {
-      fadingLabelTextRef.current = text;
+    const fadeOutSelectionLabel = async (): Promise<void> => {
       setLabelMode("fading");
       await wait(300);
       setLabel(HIDDEN_LABEL);
@@ -416,14 +446,14 @@ export const MobileDemoAnimation = (): ReactElement => {
       setCursorType("grabbing");
       setSuccessFlash(createSelectionBox(position, SELECTION_PADDING_PX));
       await wait(400);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setLabelMode("copied");
       await wait(500);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setSuccessFlash(HIDDEN_BOX);
-      await fadeOutSelectionLabel("Copied");
+      await fadeOutSelectionLabel();
       setCursorType("crosshair");
     };
 
@@ -432,159 +462,131 @@ export const MobileDemoAnimation = (): ReactElement => {
       comment: string,
     ): Promise<void> => {
       await wait(300);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setLabelMode("commenting");
       setCommentText("");
       await wait(200);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
-      for (let j = 0; j <= comment.length; j++) {
-        if (isCancelled) return;
-        setCommentText(comment.slice(0, j));
+      for (let charIndex = 0; charIndex <= comment.length; charIndex++) {
+        if (isCancelledRef.current) return;
+        setCommentText(comment.slice(0, charIndex));
         await wait(50);
       }
       await wait(300);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setLabelMode("submitted");
       setSuccessFlash(createSelectionBox(position, SELECTION_PADDING_PX));
       await wait(500);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setSuccessFlash(HIDDEN_BOX);
       setSelectionBox(HIDDEN_BOX);
-      await fadeOutSelectionLabel("Sent");
+      await fadeOutSelectionLabel();
       setCommentText("");
-    };
-
-    const animateDragSelection = async (
-      startX: number,
-      startY: number,
-      endX: number,
-      endY: number,
-    ): Promise<void> => {
-      const dragSteps = 14;
-      for (let step = 1; step <= dragSteps; step++) {
-        if (isCancelled) return;
-        const progress = step / dragSteps;
-        const currentX = startX + (endX - startX) * progress;
-        const currentY = startY + (endY - startY) * progress;
-        setCursorPos({ x: currentX, y: currentY });
-        setDragBox({
-          visible: true,
-          x: startX,
-          y: startY,
-          width: currentX - startX,
-          height: currentY - startY,
-        });
-        await wait(30);
-      }
     };
 
     const executeAnimationSequence = async (): Promise<void> => {
       resetAnimationState();
       measureElementPositions();
 
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
       await wait(500);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setIsCursorVisible(true);
       setCursorType("crosshair");
       await wait(300);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
-      // 1. Export button - comment
       const buttonPos = exportButtonPosition.current;
       const buttonCenter = getElementCenter(buttonPos);
       setCursorPos(buttonCenter);
       await wait(400);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setSelectionBox(createSelectionBox(buttonPos, SELECTION_PADDING_PX));
       displaySelectionLabel(
         buttonCenter.x,
-        buttonPos.y + buttonPos.height + 10,
+        buttonPos.y + buttonPos.height + LABEL_OFFSET_BELOW_PX,
         "ExportBtn",
         "button",
       );
-      await simulateComment(buttonPos, "add CSV option");
-      if (isCancelled) return;
+      await simulateClickAndCopy(buttonPos);
+      if (isCancelledRef.current) return;
 
-      // 2. MetricCard - comment
-      const cardPos = metricCardPosition.current;
+      const cardPos = metricCardPositions.current[0];
+      if (!cardPos) return;
       const cardCenter = getElementCenter(cardPos);
       setCursorPos(cardCenter);
       await wait(400);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setSelectionBox(createSelectionBox(cardPos, SELECTION_PADDING_PX));
       displaySelectionLabel(
         cardPos.x + cardPos.width / 2,
-        cardPos.y - 10,
+        cardPos.y + cardPos.height + LABEL_OFFSET_BELOW_PX,
         "MetricCard",
         "div",
       );
       await simulateComment(cardPos, "show graph");
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
-      // 3. StatValue - comment
       const valuePos = metricValuePosition.current;
       const valueCenter = getElementCenter(valuePos);
       setCursorPos(valueCenter);
       await wait(400);
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
       setSelectionBox(createSelectionBox(valuePos, SELECTION_PADDING_PX));
       displaySelectionLabel(
-        valuePos.x + valuePos.width + 10,
-        valueCenter.y - 10,
+        valuePos.x + valuePos.width / 2,
+        valuePos.y + valuePos.height + LABEL_OFFSET_BELOW_PX,
         "StatValue",
         "span",
       );
       await simulateComment(valuePos, "format as USD");
-      if (isCancelled) return;
+      if (isCancelledRef.current) return;
 
-      // 4. SignupRow - comment
       const signupRowPos = activityRowPositions.current[0];
       if (signupRowPos) {
         const signupCenter = getElementCenter(signupRowPos);
         setCursorPos(signupCenter);
         await wait(400);
-        if (isCancelled) return;
+        if (isCancelledRef.current) return;
 
         setSelectionBox(createSelectionBox(signupRowPos, SELECTION_PADDING_PX));
         displaySelectionLabel(
-          signupRowPos.x + 60,
-          signupRowPos.y + signupRowPos.height + 8,
+          signupCenter.x,
+          signupRowPos.y + signupRowPos.height + LABEL_OFFSET_BELOW_PX,
           "SignupRow",
           "div",
         );
         await simulateComment(signupRowPos, "add avatar");
-        if (isCancelled) return;
+        if (isCancelledRef.current) return;
       }
 
-      // 5. OrderRow - grab/copy (last one)
       const orderRowPos = activityRowPositions.current[1];
       if (orderRowPos) {
         const orderCenter = getElementCenter(orderRowPos);
         setCursorPos(orderCenter);
         await wait(400);
-        if (isCancelled) return;
+        if (isCancelledRef.current) return;
 
         setSelectionBox(createSelectionBox(orderRowPos, SELECTION_PADDING_PX));
         displaySelectionLabel(
-          orderRowPos.x + 60,
-          orderRowPos.y + orderRowPos.height + 8,
+          orderCenter.x,
+          orderRowPos.y + orderRowPos.height + LABEL_OFFSET_BELOW_PX,
           "OrderRow",
           "div",
         );
         await wait(400);
-        if (isCancelled) return;
+        if (isCancelledRef.current) return;
 
         await simulateClickAndCopy(orderRowPos);
-        if (isCancelled) return;
+        if (isCancelledRef.current) return;
       }
 
       setIsCursorVisible(false);
@@ -593,28 +595,171 @@ export const MobileDemoAnimation = (): ReactElement => {
     };
 
     const runAnimationLoop = async (): Promise<void> => {
-      while (!isCancelled) {
+      while (!isCancelledRef.current) {
         await executeAnimationSequence();
       }
     };
 
+    animationLoopRef.current = () => {
+      isCancelledRef.current = false;
+      runAnimationLoop();
+    };
+
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === "visible") {
-        isCancelled = true;
+        isCancelledRef.current = true;
         resetAnimationState();
-        isCancelled = false;
+        isCancelledRef.current = false;
         runAnimationLoop();
       }
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    isCancelledRef.current = false;
     runAnimationLoop();
 
     return () => {
-      isCancelled = true;
+      isCancelledRef.current = true;
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      if (tapTimerInnerRef.current) clearTimeout(tapTimerInnerRef.current);
+      if (idleRestartTimerRef.current)
+        clearTimeout(idleRestartTimerRef.current);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [resetAnimationState]);
+
+  const handleTap = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      if (tapTimerInnerRef.current) clearTimeout(tapTimerInnerRef.current);
+      if (idleRestartTimerRef.current)
+        clearTimeout(idleRestartTimerRef.current);
+      isCancelledRef.current = true;
+
+      triggerHaptic(VIBRATION_DURATION_MS);
+
+      setIsCursorVisible(false);
+      setIsHintVisible(false);
+      if (hintTimerRef.current) {
+        clearTimeout(hintTimerRef.current);
+        hintTimerRef.current = null;
+      }
+      setCursorType("default");
+      setCommentText("");
+
+      const containerRect = container.getBoundingClientRect();
+      const tapX = event.clientX - containerRect.left;
+      const tapY = event.clientY - containerRect.top;
+
+      const distanceToPosition = (position: Position): number => {
+        const clampedX = Math.max(
+          position.x,
+          Math.min(tapX, position.x + position.width),
+        );
+        const clampedY = Math.max(
+          position.y,
+          Math.min(tapY, position.y + position.height),
+        );
+        return Math.hypot(tapX - clampedX, tapY - clampedY);
+      };
+
+      const allElements: HitElement[] = [
+        {
+          position: exportButtonPosition.current,
+          name: "ExportBtn",
+          tag: "button",
+        },
+        {
+          position: metricValuePosition.current,
+          name: "StatValue",
+          tag: "span",
+        },
+        ...metricCardPositions.current
+          .map((cardPosition, index) =>
+            cardPosition
+              ? {
+                  position: cardPosition,
+                  name: METRIC_CARD_NAMES[index],
+                  tag: "div",
+                }
+              : null,
+          )
+          .filter((element): element is HitElement => element !== null),
+        ...activityRowPositions.current
+          .map((rowPosition, index) =>
+            rowPosition
+              ? {
+                  position: rowPosition,
+                  name: ACTIVITY_DATA[index].component,
+                  tag: "div",
+                }
+              : null,
+          )
+          .filter((element): element is HitElement => element !== null),
+      ];
+
+      let closestElement = allElements[0];
+      let closestDistance = distanceToPosition(closestElement.position);
+
+      const areaOf = (position: Position): number =>
+        position.width * position.height;
+
+      for (let index = 1; index < allElements.length; index++) {
+        const distance = distanceToPosition(allElements[index].position);
+        const isSameDistance = distance === closestDistance;
+        const isSmallerElement =
+          isSameDistance &&
+          areaOf(allElements[index].position) < areaOf(closestElement.position);
+        if (distance < closestDistance || isSmallerElement) {
+          closestDistance = distance;
+          closestElement = allElements[index];
+        }
+      }
+
+      const targetPosition = closestElement.position;
+      const labelX = getElementCenter(targetPosition).x;
+      const labelY =
+        targetPosition.y + targetPosition.height + LABEL_OFFSET_BELOW_PX;
+      const selectionBounds = createSelectionBox(
+        targetPosition,
+        SELECTION_PADDING_PX,
+      );
+
+      setSelectionBox(selectionBounds);
+      setSuccessFlash(selectionBounds);
+      setLabel({
+        visible: true,
+        x: labelX,
+        y: labelY,
+        componentName: closestElement.name,
+        tagName: closestElement.tag,
+      });
+      setLabelMode("copied");
+
+      tapTimerRef.current = setTimeout(() => {
+        if (isCancelledRef.current) {
+          setLabelMode("fading");
+          setSuccessFlash(HIDDEN_BOX);
+
+          tapTimerInnerRef.current = setTimeout(() => {
+            setSelectionBox(HIDDEN_BOX);
+            setLabel(HIDDEN_LABEL);
+            setLabelMode("idle");
+
+            idleRestartTimerRef.current = setTimeout(() => {
+              if (animationLoopRef.current) {
+                animationLoopRef.current();
+              }
+            }, IDLE_RESTART_DELAY_MS);
+          }, TAP_FEEDBACK_FADE_MS);
+        }
+      }, TAP_FEEDBACK_DISPLAY_MS);
+    },
+    [triggerHaptic],
+  );
 
   const isLabelVisible = label.visible && labelMode !== "fading";
 
@@ -643,18 +788,24 @@ export const MobileDemoAnimation = (): ReactElement => {
         }
       `}</style>
 
-      <div className="overflow-hidden rounded-xl border border-white/10 bg-neutral-900 shadow-lg shadow-black/20">
-        <div ref={containerRef} className="relative p-4 pb-14">
+      <div className="overflow-hidden rounded-xl border border-border bg-card shadow-lg shadow-black/20">
+        <div
+          ref={containerRef}
+          onClick={handleTap}
+          className="relative p-4 pb-14"
+        >
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <div className="text-[13px] font-semibold text-white">
+              <div className="text-[13px] font-semibold text-foreground">
                 Overview
               </div>
-              <div className="text-[11px] text-white/40">Last 30 days</div>
+              <div className="text-[11px] text-muted-foreground">
+                Last 30 days
+              </div>
             </div>
             <div
               ref={exportButtonRef}
-              className="rounded-md bg-white/20 px-3 py-1.5 text-[11px] font-medium text-white/70"
+              className="rounded-md bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground"
             >
               Export
             </div>
@@ -662,69 +813,98 @@ export const MobileDemoAnimation = (): ReactElement => {
 
           <div className="mb-4 grid grid-cols-3 gap-2.5">
             <div
-              ref={metricCardRef}
-              className="rounded-lg border border-white/10 bg-white/5 p-2.5"
+              ref={(el) => {
+                metricCardRefs.current[0] = el;
+              }}
+              className="rounded-lg border border-border bg-muted/50 p-2.5"
             >
-              <div className="mb-1 text-[10px] font-medium text-white/50">
+              <div className="mb-1 text-[10px] font-medium text-muted-foreground">
                 Revenue
               </div>
               <div
                 ref={metricValueRef}
-                className="text-[18px] font-semibold tabular-nums text-white"
+                className="text-[18px] font-semibold tabular-nums text-foreground"
               >
                 $12.4k
               </div>
-              <div className="mt-1 text-[10px] text-white/50">+12.5%</div>
+              <div className="mt-1 text-[10px] text-muted-foreground">
+                +12.5%
+              </div>
             </div>
 
-            <div className="rounded-lg border border-white/10 bg-white/5 p-2.5">
-              <div className="mb-1 text-[10px] font-medium text-white/50">
+            <div
+              ref={(el) => {
+                metricCardRefs.current[1] = el;
+              }}
+              className="rounded-lg border border-border bg-muted/50 p-2.5"
+            >
+              <div className="mb-1 text-[10px] font-medium text-muted-foreground">
                 Users
               </div>
-              <div className="text-[18px] font-semibold tabular-nums text-white">
+              <div className="text-[18px] font-semibold tabular-nums text-foreground">
                 2,847
               </div>
-              <div className="mt-1 text-[10px] text-white/50">+8.2%</div>
+              <div className="mt-1 text-[10px] text-muted-foreground">
+                +8.2%
+              </div>
             </div>
 
-            <div className="rounded-lg border border-white/10 bg-white/5 p-2.5">
-              <div className="mb-1 text-[10px] font-medium text-white/50">
+            <div
+              ref={(el) => {
+                metricCardRefs.current[2] = el;
+              }}
+              className="rounded-lg border border-border bg-muted/50 p-2.5"
+            >
+              <div className="mb-1 text-[10px] font-medium text-muted-foreground">
                 Orders
               </div>
-              <div className="text-[18px] font-semibold tabular-nums text-white">
+              <div className="text-[18px] font-semibold tabular-nums text-foreground">
                 384
               </div>
-              <div className="mt-1 text-[10px] text-white/50">-2.1%</div>
+              <div className="mt-1 text-[10px] text-muted-foreground">
+                -2.1%
+              </div>
             </div>
           </div>
 
-          <div className="rounded-lg border border-white/10">
-            <div className="border-b border-white/10 px-3 py-2">
-              <div className="text-[11px] font-medium text-white/70">
+          <div className="rounded-lg border border-border">
+            <div className="border-b border-border px-3 py-2">
+              <div className="text-[11px] font-medium text-muted-foreground">
                 Recent Activity
               </div>
             </div>
-            <div className="divide-y divide-white/10">
-              {ACTIVITY_DATA.map((activity, i) => (
+            <div className="divide-y divide-border">
+              {ACTIVITY_DATA.map((activity, activityIndex) => (
                 <div
                   key={activity.label}
                   ref={(el) => {
-                    activityRowRefs.current[i] = el;
+                    activityRowRefs.current[activityIndex] = el;
                   }}
                   className="flex items-center justify-between px-3 py-2"
                 >
                   <div className="flex items-center gap-2">
-                    <div className="h-5 w-5 rounded-full bg-white/10" />
-                    <span className="text-[11px] text-white/70">
+                    <div className="h-5 w-5 rounded-full bg-muted/50" />
+                    <span className="text-[11px] text-muted-foreground">
                       {activity.label}
                     </span>
                   </div>
-                  <span className="text-[10px] text-white/40">
+                  <span className="text-[10px] text-muted-foreground">
                     {activity.time}
                   </span>
                 </div>
               ))}
             </div>
+          </div>
+
+          <div
+            className={cn(
+              "absolute inset-x-0 bottom-0 z-[70] flex items-center justify-center bg-gradient-to-t from-card via-card/90 to-card/0 pb-3 pt-8 transition-opacity duration-700",
+              isHintVisible ? "opacity-100" : "opacity-0 pointer-events-none",
+            )}
+          >
+            <span className="rounded-full bg-foreground/10 px-3 py-1.5 text-[12px] font-medium text-muted-foreground">
+              👆 Tap any element to copy
+            </span>
           </div>
 
           <div
@@ -771,18 +951,6 @@ export const MobileDemoAnimation = (): ReactElement => {
             }}
           />
 
-          {dragBox.visible && (
-            <div
-              className="pointer-events-none absolute z-45 rounded-md border-[1.5px] border-dashed border-[#d239c0]/40 bg-[#d239c0]/5"
-              style={{
-                left: dragBox.x,
-                top: dragBox.y,
-                width: dragBox.width,
-                height: dragBox.height,
-              }}
-            />
-          )}
-
           <div
             className={cn(
               "pointer-events-none absolute z-42 rounded-lg border-2 border-[#d239c0] bg-[#d239c0]/15 transition-[opacity,transform] duration-200",
@@ -806,13 +974,20 @@ export const MobileDemoAnimation = (): ReactElement => {
             style={{
               left: label.x,
               top: label.y,
-              transform: label.above
-                ? "translateX(-50%) translateY(-100%)"
-                : "translateX(-50%)",
+              transform: "translateX(-50%)",
             }}
           >
+            <div
+              className="absolute left-1/2 h-0 w-0 -translate-x-1/2"
+              style={{
+                top: -5,
+                borderLeft: "5px solid transparent",
+                borderRight: "5px solid transparent",
+                borderBottom: "5px solid white",
+              }}
+            />
             {labelMode === "selecting" && (
-              <div className="flex items-center gap-[5px] py-1.5 px-2">
+              <div className="flex items-center py-1.5 px-2">
                 <span className="text-[13px] leading-4 font-medium text-black">
                   {label.componentName}
                 </span>
@@ -829,7 +1004,9 @@ export const MobileDemoAnimation = (): ReactElement => {
                 </span>
               </div>
             )}
-            {labelMode === "copied" && (
+            {(labelMode === "copied" ||
+              labelMode === "submitted" ||
+              labelMode === "fading") && (
               <div className="flex items-center gap-[5px] py-1.5 px-2">
                 <CheckIcon />
                 <span className="text-[13px] leading-4 font-medium text-black">
@@ -839,7 +1016,7 @@ export const MobileDemoAnimation = (): ReactElement => {
             )}
             {labelMode === "commenting" && (
               <div className="flex flex-col min-w-[140px]">
-                <div className="flex items-center gap-[5px] pt-1.5 pb-1 px-2">
+                <div className="flex items-center pt-1.5 pb-1 px-2">
                   <span className="text-[13px] leading-4 font-medium text-black">
                     {label.componentName}
                   </span>
@@ -862,27 +1039,11 @@ export const MobileDemoAnimation = (): ReactElement => {
                 </div>
               </div>
             )}
-            {labelMode === "submitted" && (
-              <div className="flex items-center gap-[5px] py-1.5 px-2">
-                <CheckIcon />
-                <span className="text-[13px] leading-4 font-medium text-black">
-                  Sent
-                </span>
-              </div>
-            )}
-            {labelMode === "fading" && (
-              <div className="flex items-center gap-[5px] py-1.5 px-2">
-                <CheckIcon />
-                <span className="text-[13px] leading-4 font-medium text-black">
-                  {fadingLabelTextRef.current}
-                </span>
-              </div>
-            )}
           </div>
         </div>
       </div>
 
-      <p className="mt-1.5 text-sm text-white/30">
+      <p className="mt-1.5 text-sm text-muted-foreground/60">
         This website is best viewed on desktop
       </p>
     </div>

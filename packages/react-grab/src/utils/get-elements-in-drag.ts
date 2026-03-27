@@ -1,8 +1,8 @@
 import type { DragRect, Rect } from "../types.js";
 import {
-  enablePointerEventsOverride,
-  disablePointerEventsOverride,
-} from "./pointer-events-override.js";
+  suspendPointerEventsFreeze,
+  resumePointerEventsFreeze,
+} from "./freeze-pseudo-states.js";
 import {
   DRAG_SELECTION_COVERAGE_THRESHOLD,
   DRAG_SELECTION_SAMPLE_SPACING_PX,
@@ -128,10 +128,10 @@ const createSamplePoints = (dragRect: DragRect): SamplePoint[] => {
   addPoint(centerX, centerY);
 
   for (let xIndex = 0; xIndex < scaledXCount; xIndex += 1) {
-    const x = left + ((xIndex + 0.5) / scaledXCount) * dragRect.width;
+    const sampleX = left + ((xIndex + 0.5) / scaledXCount) * dragRect.width;
     for (let yIndex = 0; yIndex < scaledYCount; yIndex += 1) {
-      const y = top + ((yIndex + 0.5) / scaledYCount) * dragRect.height;
-      addPoint(x, y);
+      const sampleY = top + ((yIndex + 0.5) / scaledYCount) * dragRect.height;
+      addPoint(sampleX, sampleY);
     }
   }
 
@@ -153,7 +153,7 @@ const filterElementsInDrag = (
   const candidates = new Set<Element>();
   const samplePoints = createSamplePoints(dragRect);
 
-  enablePointerEventsOverride();
+  suspendPointerEventsFreeze();
   try {
     for (const point of samplePoints) {
       const elementsAtPoint = document.elementsFromPoint(point.x, point.y);
@@ -162,7 +162,7 @@ const filterElementsInDrag = (
       }
     }
   } finally {
-    disablePointerEventsOverride();
+    resumePointerEventsFreeze();
   }
 
   const matchingElements: Element[] = [];
@@ -217,12 +217,12 @@ const removeNestedElements = (elements: Element[]): Element[] => {
 export const getElementsInDrag = (
   dragRect: DragRect,
   isValidGrabbableElement: (element: Element) => boolean,
-  strict = true,
+  shouldCheckCoverage = true,
 ): Element[] => {
   const elements = filterElementsInDrag(
     dragRect,
     isValidGrabbableElement,
-    strict,
+    shouldCheckCoverage,
   );
   return removeNestedElements(elements);
 };

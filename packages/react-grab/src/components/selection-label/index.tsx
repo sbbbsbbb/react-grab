@@ -4,21 +4,23 @@ import {
   createSignal,
   createEffect,
   createMemo,
+  on,
   onMount,
   onCleanup,
 } from "solid-js";
 import type { Component } from "solid-js";
 import type { ArrowPosition, SelectionLabelProps } from "../../types.js";
 import {
-  DEFERRED_EXECUTION_DELAY_MS,
   IME_COMPOSING_KEY_CODE,
   VIEWPORT_MARGIN_PX,
   ARROW_CENTER_PERCENT,
   ARROW_LABEL_MARGIN_PX,
   LABEL_GAP_PX,
-  PANEL_STYLES,
   SELECTION_LABEL_OFFSCREEN_PX,
+  TEXTAREA_MAX_HEIGHT_PX,
+  Z_INDEX_LABEL,
 } from "../../constants.js";
+import { autoResizeTextarea } from "../../utils/auto-resize-textarea.js";
 import { getArrowSize } from "../../utils/get-arrow-size.js";
 import { isKeyboardEventTriggeredByInput } from "../../utils/is-keyboard-event-triggered-by-input.js";
 import { cn } from "../../utils/cn.js";
@@ -33,8 +35,17 @@ import { BottomSection } from "./bottom-section.js";
 import { DiscardPrompt } from "./discard-prompt.js";
 import { ErrorView } from "./error-view.js";
 import { CompletionView } from "./completion-view.js";
+import { ArrowNavigationMenu } from "./arrow-navigation-menu.js";
 
-const DEFAULT_OFFSCREEN_POSITION = {
+interface LabelPosition {
+  left: number;
+  top: number;
+  arrowLeftPercent: number;
+  arrowLeftOffset: number;
+  edgeOffsetX: number;
+}
+
+const DEFAULT_OFFSCREEN_POSITION: LabelPosition = {
   left: SELECTION_LABEL_OFFSCREEN_PX,
   top: SELECTION_LABEL_OFFSCREEN_PX,
   arrowLeftPercent: ARROW_CENTER_PERCENT,
@@ -42,28 +53,25 @@ const DEFAULT_OFFSCREEN_POSITION = {
   edgeOffsetX: 0,
 };
 
+interface PositionResult {
+  position: LabelPosition;
+  computedArrowPosition: ArrowPosition | null;
+  hadValidBounds: boolean;
+  elementIdentity: string;
+}
+
 export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
   let containerRef: HTMLDivElement | undefined;
   let panelRef: HTMLDivElement | undefined;
   let inputRef: HTMLTextAreaElement | undefined;
   let isTagCurrentlyHovered = false;
-  let lastValidPosition: {
-    left: number;
-    top: number;
-    arrowLeftPercent: number;
-    arrowLeftOffset: number;
-    edgeOffsetX: number;
-  } | null = null;
-  let lastElementIdentity: string | null = null;
 
   const [measuredWidth, setMeasuredWidth] = createSignal(0);
   const [measuredHeight, setMeasuredHeight] = createSignal(0);
   const [panelWidth, setPanelWidth] = createSignal(0);
-  const [arrowPosition, setArrowPosition] =
-    createSignal<ArrowPosition>("bottom");
   const [viewportVersion, setViewportVersion] = createSignal(0);
-  const [hadValidBounds, setHadValidBounds] = createSignal(false);
   const [isInternalFading, setIsInternalFading] = createSignal(false);
+  const [isShaking, setIsShaking] = createSignal(false);
 
   const canInteract = () =>
     props.status !== "copying" &&
@@ -86,19 +94,12 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     ) {
       return true;
     }
+    if (props.arrowNavigationState?.isVisible) return true;
+    if (props.inspectNavigationState?.isVisible) return true;
     return false;
   };
 
-  const measureContainer = () => {
-    if (containerRef && !isTagCurrentlyHovered) {
-      const rect = containerRef.getBoundingClientRect();
-      setMeasuredWidth(rect.width);
-      setMeasuredHeight(rect.height);
-    }
-    if (panelRef) {
-      setPanelWidth(panelRef.getBoundingClientRect().width);
-    }
-  };
+  let resizeObserver: ResizeObserver | undefined;
 
   const handleTagHoverChange = (hovered: boolean) => {
     isTagCurrentlyHovered = hovered;
@@ -121,196 +122,206 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
 
     if (isEnterToExpand) {
       event.preventDefault();
-      event.stopPropagation();
       event.stopImmediatePropagation();
       props.onToggleExpand?.();
     } else if (isCtrlCToAbort) {
       event.preventDefault();
-      event.stopPropagation();
       event.stopImmediatePropagation();
       props.onAbort?.();
     }
   };
 
   onMount(() => {
-    measureContainer();
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const rect = entry.target.getBoundingClientRect();
+        if (entry.target === containerRef && !isTagCurrentlyHovered) {
+          setMeasuredWidth(rect.width);
+          setMeasuredHeight(rect.height);
+        } else if (entry.target === panelRef) {
+          setPanelWidth(rect.width);
+        }
+      }
+    });
+    if (containerRef) {
+      const rect = containerRef.getBoundingClientRect();
+      setMeasuredWidth(rect.width);
+      setMeasuredHeight(rect.height);
+      resizeObserver.observe(containerRef);
+    }
+    if (panelRef) {
+      setPanelWidth(panelRef.getBoundingClientRect().width);
+      resizeObserver.observe(panelRef);
+    }
     window.addEventListener("scroll", handleViewportChange, true);
     window.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("scroll", handleViewportChange);
     window.addEventListener("keydown", handleGlobalKeyDown, { capture: true });
   });
 
   onCleanup(() => {
+    resizeObserver?.disconnect();
     window.removeEventListener("scroll", handleViewportChange, true);
     window.removeEventListener("resize", handleViewportChange);
+    window.visualViewport?.removeEventListener("resize", handleViewportChange);
+    window.visualViewport?.removeEventListener("scroll", handleViewportChange);
     window.removeEventListener("keydown", handleGlobalKeyDown, {
       capture: true,
     });
   });
 
-  createEffect(() => {
-    const elementIdentity = `${props.tagName ?? ""}:${props.componentName ?? ""}`;
-    if (elementIdentity !== lastElementIdentity) {
-      lastElementIdentity = elementIdentity;
-      lastValidPosition = null;
-    }
-  });
+  const elementIdentity = () =>
+    `${props.tagName ?? ""}:${props.componentName ?? ""}`;
 
-  const sizeAffectingSignature = createMemo(() => [
-    props.tagName,
-    props.componentName,
-    props.elementsCount,
-    props.statusText,
-    props.inputValue,
-    props.hasAgent,
-    props.isPromptMode,
-    props.isPendingDismiss,
-    props.error,
-    props.isPendingAbort,
-    props.visible,
-    props.status,
-    props.actionCycleState?.items,
-    props.actionCycleState?.activeIndex,
-    props.actionCycleState?.isVisible,
-  ]);
+  const positionComputation = createMemo(
+    (previousResult: PositionResult): PositionResult => {
+      viewportVersion();
+      const currentElementIdentity = elementIdentity();
+      const didReset =
+        currentElementIdentity !== previousResult.elementIdentity;
+      const cached: PositionResult = didReset
+        ? {
+            position: DEFAULT_OFFSCREEN_POSITION,
+            computedArrowPosition: null,
+            hadValidBounds: false,
+            elementIdentity: currentElementIdentity,
+          }
+        : previousResult;
 
-  createEffect(() => {
-    // HACK: Trigger measurement when content that affects size changes.
-    // Solid's fine-grained reactivity means we do not re-render the entire
-    // component on every prop change. Label positioning depends on measured
-    // width/height for centering, and width/height depends on rendered content.
-    // We therefore force a re-measure whenever any size-affecting input changes.
-    // Without this, switching from a short tag to a long component name can keep
-    // stale width and offset the label incorrectly.
-    void sizeAffectingSignature();
-    queueMicrotask(measureContainer);
-  });
+      const bounds = props.selectionBounds;
+      const labelWidth = measuredWidth();
+      const labelHeight = measuredHeight();
+      const hasMeasurements = labelWidth > 0 && labelHeight > 0;
+      const hasValidBounds = bounds && bounds.width > 0 && bounds.height > 0;
 
-  createEffect(() => {
-    if (props.isPromptMode && inputRef && props.onSubmit) {
-      // HACK: Defer focus one tick so the textarea is fully mounted.
-      const focusTimeout = setTimeout(() => {
-        inputRef?.focus();
-      }, DEFERRED_EXECUTION_DELAY_MS);
-      onCleanup(() => {
-        clearTimeout(focusTimeout);
-      });
-    }
-  });
-
-  const positionComputation = createMemo(() => {
-    viewportVersion();
-
-    const bounds = props.selectionBounds;
-    const labelWidth = measuredWidth();
-    const labelHeight = measuredHeight();
-    const hasMeasurements = labelWidth > 0 && labelHeight > 0;
-    const hasValidBounds = bounds && bounds.width > 0 && bounds.height > 0;
-
-    if (!hasMeasurements || !hasValidBounds) {
-      return {
-        position: lastValidPosition ?? DEFAULT_OFFSCREEN_POSITION,
-        computedArrowPosition: null,
-      };
-    }
-
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-
-    const isSelectionVisibleInViewport =
-      bounds.x + bounds.width > 0 &&
-      bounds.x < viewportWidth &&
-      bounds.y + bounds.height > 0 &&
-      bounds.y < viewportHeight;
-
-    if (!isSelectionVisibleInViewport) {
-      return {
-        position: DEFAULT_OFFSCREEN_POSITION,
-        computedArrowPosition: null,
-      };
-    }
-
-    const selectionCenterX = bounds.x + bounds.width / 2;
-    const cursorX = props.mouseX ?? selectionCenterX;
-    const selectionBottom = bounds.y + bounds.height;
-    const selectionTop = bounds.y;
-
-    const actualArrowHeight = props.hideArrow ? 0 : getArrowSize(panelWidth());
-
-    // HACK: Use cursorX as anchor point, CSS transform handles centering via translateX(-50%)
-    // This avoids the flicker when content changes because centering doesn't depend on JS measurement
-    const anchorX = cursorX;
-    let edgeOffsetX = 0;
-    let positionTop = selectionBottom + actualArrowHeight + LABEL_GAP_PX;
-
-    if (labelWidth > 0) {
-      const labelLeft = anchorX - labelWidth / 2;
-      const labelRight = anchorX + labelWidth / 2;
-
-      if (labelRight > viewportWidth - VIEWPORT_MARGIN_PX) {
-        edgeOffsetX = viewportWidth - VIEWPORT_MARGIN_PX - labelRight;
+      if (!hasMeasurements || !hasValidBounds) {
+        return {
+          position: cached.hadValidBounds
+            ? cached.position
+            : DEFAULT_OFFSCREEN_POSITION,
+          computedArrowPosition: cached.computedArrowPosition,
+          hadValidBounds: cached.hadValidBounds,
+          elementIdentity: currentElementIdentity,
+        };
       }
-      if (labelLeft + edgeOffsetX < VIEWPORT_MARGIN_PX) {
-        edgeOffsetX = VIEWPORT_MARGIN_PX - labelLeft;
+
+      const visualViewport = window.visualViewport;
+      const viewportLeft = visualViewport?.offsetLeft ?? 0;
+      const viewportTop = visualViewport?.offsetTop ?? 0;
+      const viewportRight =
+        viewportLeft + (visualViewport?.width ?? window.innerWidth);
+      const viewportBottom =
+        viewportTop + (visualViewport?.height ?? window.innerHeight);
+
+      const isSelectionVisibleInViewport =
+        bounds.x + bounds.width > viewportLeft &&
+        bounds.x < viewportRight &&
+        bounds.y + bounds.height > viewportTop &&
+        bounds.y < viewportBottom;
+
+      if (!isSelectionVisibleInViewport) {
+        return {
+          position: DEFAULT_OFFSCREEN_POSITION,
+          computedArrowPosition: cached.computedArrowPosition,
+          hadValidBounds: cached.hadValidBounds,
+          elementIdentity: currentElementIdentity,
+        };
       }
-    }
 
-    const totalHeightNeeded = labelHeight + actualArrowHeight + LABEL_GAP_PX;
-    const fitsBelow =
-      positionTop + labelHeight <= viewportHeight - VIEWPORT_MARGIN_PX;
+      const selectionCenterX = bounds.x + bounds.width / 2;
+      const cursorX = props.mouseX ?? selectionCenterX;
+      const selectionBottom = bounds.y + bounds.height;
+      const selectionTop = bounds.y;
 
-    if (!fitsBelow) {
-      positionTop = selectionTop - totalHeightNeeded;
-    }
+      const actualArrowHeight = props.hideArrow
+        ? 0
+        : getArrowSize(panelWidth());
 
-    if (positionTop < VIEWPORT_MARGIN_PX) {
-      positionTop = VIEWPORT_MARGIN_PX;
-    }
+      // HACK: Use cursorX as anchor point, CSS transform handles centering via translateX(-50%)
+      // This avoids the flicker when content changes because centering doesn't depend on JS measurement
+      const anchorX = cursorX;
+      let edgeOffsetX = 0;
+      let positionTop = selectionBottom + actualArrowHeight + LABEL_GAP_PX;
 
-    const arrowLeftPercent = ARROW_CENTER_PERCENT;
-    const labelHalfWidth = labelWidth / 2;
-    const arrowCenterPx = labelHalfWidth - edgeOffsetX;
-    const arrowMinPx = Math.min(ARROW_LABEL_MARGIN_PX, labelHalfWidth);
-    const arrowMaxPx = Math.max(
-      labelWidth - ARROW_LABEL_MARGIN_PX,
-      labelHalfWidth,
-    );
-    const clampedArrowCenterPx = Math.max(
-      arrowMinPx,
-      Math.min(arrowMaxPx, arrowCenterPx),
-    );
-    const arrowLeftOffset = clampedArrowCenterPx - labelHalfWidth;
+      if (labelWidth > 0) {
+        const labelLeft = anchorX - labelWidth / 2;
+        const labelRight = anchorX + labelWidth / 2;
 
-    const computedArrowPosition: ArrowPosition = fitsBelow ? "bottom" : "top";
+        if (labelRight > viewportRight - VIEWPORT_MARGIN_PX) {
+          edgeOffsetX = viewportRight - VIEWPORT_MARGIN_PX - labelRight;
+        }
+        if (labelLeft + edgeOffsetX < viewportLeft + VIEWPORT_MARGIN_PX) {
+          edgeOffsetX = viewportLeft + VIEWPORT_MARGIN_PX - labelLeft;
+        }
+      }
 
-    return {
-      position: {
-        left: anchorX,
-        top: positionTop,
-        arrowLeftPercent,
-        arrowLeftOffset,
-        edgeOffsetX,
-      },
-      computedArrowPosition,
-    };
-  });
+      const totalHeightNeeded = labelHeight + actualArrowHeight + LABEL_GAP_PX;
+      const fitsBelow =
+        positionTop + labelHeight <= viewportBottom - VIEWPORT_MARGIN_PX;
 
-  const computedPosition = () => positionComputation().position;
+      if (!fitsBelow) {
+        positionTop = selectionTop - totalHeightNeeded;
+      }
 
-  createEffect(() => {
-    const result = positionComputation();
-    if (result.computedArrowPosition !== null) {
-      lastValidPosition = result.position;
-      setHadValidBounds(true);
-      setArrowPosition(result.computedArrowPosition);
-    }
-  });
+      if (positionTop < viewportTop + VIEWPORT_MARGIN_PX) {
+        positionTop = viewportTop + VIEWPORT_MARGIN_PX;
+      }
+
+      const arrowLeftPercent = ARROW_CENTER_PERCENT;
+      const labelHalfWidth = labelWidth / 2;
+      const arrowCenterPx = labelHalfWidth - edgeOffsetX;
+      const arrowMinPx = Math.min(ARROW_LABEL_MARGIN_PX, labelHalfWidth);
+      const arrowMaxPx = Math.max(
+        labelWidth - ARROW_LABEL_MARGIN_PX,
+        labelHalfWidth,
+      );
+      const clampedArrowCenterPx = Math.max(
+        arrowMinPx,
+        Math.min(arrowMaxPx, arrowCenterPx),
+      );
+      const arrowLeftOffset = clampedArrowCenterPx - labelHalfWidth;
+
+      const computedArrowPosition: ArrowPosition = fitsBelow ? "bottom" : "top";
+
+      return {
+        position: {
+          left: anchorX,
+          top: positionTop,
+          arrowLeftPercent,
+          arrowLeftOffset,
+          edgeOffsetX,
+        },
+        computedArrowPosition,
+        hadValidBounds: true,
+        elementIdentity: currentElementIdentity,
+      };
+    },
+    {
+      position: DEFAULT_OFFSCREEN_POSITION,
+      computedArrowPosition: null,
+      hadValidBounds: false,
+      elementIdentity: "",
+    } satisfies PositionResult,
+  );
+
+  const arrowPosition = () =>
+    positionComputation().computedArrowPosition ?? "bottom";
+  const hadValidBounds = () => positionComputation().hadValidBounds;
+
+  createEffect(
+    on(
+      () => props.selectionLabelShakeCount,
+      () => setIsShaking(true),
+      { defer: true },
+    ),
+  );
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.isComposing || event.keyCode === IME_COMPOSING_KEY_CODE) {
       return;
     }
 
-    event.stopPropagation();
     event.stopImmediatePropagation();
 
     const isEnterWithoutShift = event.code === "Enter" && !event.shiftKey;
@@ -330,6 +341,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     if (!(inputTarget instanceof HTMLTextAreaElement)) {
       return;
     }
+    autoResizeTextarea(inputTarget, TEXTAREA_MAX_HEIGHT_PX);
     props.onInputChange?.(inputTarget.value);
   };
 
@@ -340,24 +352,20 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
       elementsCount: props.elementsCount,
     });
 
-  const tagDisplay = () => tagDisplayResult().tagName;
-  const componentNameDisplay = () => tagDisplayResult().componentName;
-  const actionCycleItems = () => props.actionCycleState?.items ?? [];
-  const actionCycleActiveIndex = () => props.actionCycleState?.activeIndex ?? 0;
-  const isActionCycleVisible = () => Boolean(props.actionCycleState?.isVisible);
+  const isArrowNavigationVisible = () =>
+    Boolean(props.arrowNavigationState?.isVisible);
+
+  const isInspectNavigationVisible = () =>
+    Boolean(props.inspectNavigationState?.isVisible);
 
   const handleTagClick = (event: MouseEvent) => {
-    event.stopPropagation();
     event.stopImmediatePropagation();
     if (props.filePath && props.onOpen) {
       props.onOpen();
     }
   };
 
-  const isTagClickable = () => Boolean(props.filePath && props.onOpen);
-
   const handleContainerPointerDown = (event: PointerEvent) => {
-    event.stopPropagation();
     event.stopImmediatePropagation();
     const isEditableInputVisible =
       canInteract() &&
@@ -365,7 +373,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
       !props.isPendingDismiss &&
       props.onSubmit;
     if (isEditableInputVisible && inputRef) {
-      inputRef.focus();
+      inputRef.focus({ preventScroll: true });
     }
   };
 
@@ -387,16 +395,15 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
           "fixed font-sans text-[13px] antialiased filter-[drop-shadow(0px_1px_2px_#51515140)] select-none transition-opacity duration-100 ease-out",
         )}
         style={{
-          top: `${computedPosition().top}px`,
-          left: `${computedPosition().left}px`,
-          transform: `translateX(calc(-50% + ${computedPosition().edgeOffsetX}px))`,
-          "z-index": "2147483647",
+          top: `${positionComputation().position.top}px`,
+          left: `${positionComputation().position.left}px`,
+          transform: `translateX(calc(-50% + ${positionComputation().position.edgeOffsetX}px))`,
+          "z-index": `${Z_INDEX_LABEL}`,
           "pointer-events": shouldEnablePointerEvents() ? "auto" : "none",
           opacity: props.status === "fading" || isInternalFading() ? 0 : 1,
         }}
         onPointerDown={handleContainerPointerDown}
         onClick={(event) => {
-          event.stopPropagation();
           event.stopImmediatePropagation();
         }}
         onMouseEnter={() => props.onHoverChange?.(true)}
@@ -405,8 +412,8 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
         <Show when={!props.hideArrow}>
           <Arrow
             position={arrowPosition()}
-            leftPercent={computedPosition().arrowLeftPercent}
-            leftOffsetPx={computedPosition().arrowLeftOffset}
+            leftPercent={positionComputation().position.arrowLeftPercent}
+            leftOffsetPx={positionComputation().position.arrowLeftOffset}
             labelWidth={panelWidth()}
           />
         </Show>
@@ -423,9 +430,6 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
             onDismiss={props.onDismiss}
             onUndo={props.onUndo}
             onFollowUpSubmit={props.onFollowUpSubmit}
-            onCopyStateChange={() => {
-              queueMicrotask(measureContainer);
-            }}
             onFadingChange={setIsInternalFading}
             onShowContextMenu={props.onShowContextMenu}
           />
@@ -435,11 +439,13 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
           ref={panelRef}
           class={cn(
             "contain-layout flex items-center gap-[5px] rounded-[10px] antialiased w-fit h-fit p-0 [font-synthesis:none] [corner-shape:superellipse(1.25)]",
-            PANEL_STYLES,
+            "bg-white",
+            isShaking() && "animate-shake",
           )}
           style={{
             display: isCompletedStatus() && !props.error ? "none" : undefined,
           }}
+          onAnimationEnd={() => setIsShaking(false)}
         >
           <Show when={props.status === "copying" && !props.isPendingAbort}>
             <div
@@ -464,7 +470,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
                       style={{
                         "field-sizing": "content",
                         "min-height": "16px",
-                        "max-height": "95px",
+                        "max-height": `${TEXTAREA_MAX_HEIGHT_PX}px`,
                         "scrollbar-width": "none",
                       }}
                       value={props.inputValue ?? ""}
@@ -500,31 +506,80 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
           </Show>
 
           <Show when={canInteract() && !props.isPromptMode}>
-            <div class="contain-layout shrink-0 flex flex-col items-start w-fit h-fit">
-              <div class="contain-layout shrink-0 flex items-center gap-1 py-1.5 w-fit h-fit px-2">
+            <div
+              class="contain-layout shrink-0 flex flex-col items-start w-fit h-fit"
+              classList={{
+                "min-w-[100px]":
+                  isArrowNavigationVisible() || isInspectNavigationVisible(),
+              }}
+            >
+              <div
+                class="contain-layout shrink-0 flex items-center gap-1 w-fit h-fit px-2"
+                classList={{
+                  "py-1.5":
+                    !isArrowNavigationVisible() &&
+                    !isInspectNavigationVisible(),
+                  "pt-1.5 pb-1":
+                    isArrowNavigationVisible() || isInspectNavigationVisible(),
+                }}
+              >
                 <TagBadge
-                  tagName={tagDisplay()}
-                  componentName={componentNameDisplay()}
-                  isClickable={isTagClickable()}
+                  tagName={tagDisplayResult().tagName}
+                  componentName={tagDisplayResult().componentName}
+                  isClickable={Boolean(props.filePath && props.onOpen)}
                   onClick={handleTagClick}
                   onHoverChange={handleTagHoverChange}
                   shrink
-                  forceShowIcon={Boolean(props.isContextMenuOpen)}
+                  forceShowIcon={
+                    isArrowNavigationVisible() || isInspectNavigationVisible()
+                      ? Boolean(props.filePath && props.onOpen)
+                      : Boolean(props.isContextMenuOpen)
+                  }
                 />
               </div>
-              <Show when={isActionCycleVisible()}>
+              <Show when={props.arrowNavigationState?.isVisible}>
+                <ArrowNavigationMenu
+                  items={props.arrowNavigationState!.items}
+                  activeIndex={props.arrowNavigationState!.activeIndex}
+                  onSelect={(index) => props.onArrowNavigationSelect?.(index)}
+                />
+              </Show>
+              <Show
+                when={
+                  !isArrowNavigationVisible() &&
+                  isInspectNavigationVisible() &&
+                  props.inspectNavigationState
+                }
+              >
+                {(state) => (
+                  <ArrowNavigationMenu
+                    items={state().items}
+                    activeIndex={state().activeIndex}
+                    onSelect={(index) => props.onInspectSelect?.(index)}
+                  />
+                )}
+              </Show>
+              <Show
+                when={
+                  !isArrowNavigationVisible() &&
+                  !isInspectNavigationVisible() &&
+                  Boolean(props.actionCycleState?.isVisible)
+                }
+              >
                 <BottomSection>
                   <div class="flex flex-col w-[calc(100%+16px)] -mx-2 -my-1.5">
-                    <For each={actionCycleItems()}>
+                    <For each={props.actionCycleState?.items ?? []}>
                       {(item, itemIndex) => (
                         <div
                           data-react-grab-action-cycle-item={item.label.toLowerCase()}
                           class="contain-layout flex items-center justify-between w-full px-2 py-1 transition-colors"
                           classList={{
                             "bg-black/5":
-                              itemIndex() === actionCycleActiveIndex(),
+                              itemIndex() ===
+                              (props.actionCycleState?.activeIndex ?? 0),
                             "rounded-b-[6px]":
-                              itemIndex() === actionCycleItems().length - 1,
+                              itemIndex() ===
+                              (props.actionCycleState?.items ?? []).length - 1,
                           }}
                         >
                           <span class="text-[13px] leading-4 font-sans font-medium text-black">
@@ -552,9 +607,9 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
             <div class="contain-layout shrink-0 flex flex-col justify-center items-start w-fit h-fit min-w-[150px] max-w-[280px]">
               <div class="contain-layout shrink-0 flex items-center gap-1 pt-1.5 pb-1 w-fit h-fit px-2 max-w-full">
                 <TagBadge
-                  tagName={tagDisplay()}
-                  componentName={componentNameDisplay()}
-                  isClickable={isTagClickable()}
+                  tagName={tagDisplayResult().tagName}
+                  componentName={tagDisplayResult().componentName}
+                  isClickable={Boolean(props.filePath && props.onOpen)}
                   onClick={handleTagClick}
                   onHoverChange={handleTagHoverChange}
                   forceShowIcon
@@ -574,14 +629,22 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
                   style={{ "padding-left": props.replyToPrompt ? "14px" : "0" }}
                 >
                   <textarea
-                    ref={inputRef}
+                    ref={(element) => {
+                      inputRef = element;
+                      if (props.onSubmit) {
+                        queueMicrotask(() => {
+                          element.focus({ preventScroll: true });
+                          autoResizeTextarea(element, TEXTAREA_MAX_HEIGHT_PX);
+                        });
+                      }
+                    }}
                     data-react-grab-ignore-events
                     data-react-grab-input
                     class="text-black text-[13px] leading-4 font-medium bg-transparent border-none outline-none resize-none flex-1 p-0 m-0 wrap-break-word overflow-y-auto"
                     style={{
                       "field-sizing": "content",
                       "min-height": "16px",
-                      "max-height": "95px",
+                      "max-height": `${TEXTAREA_MAX_HEIGHT_PX}px`,
                       "scrollbar-width": "none",
                     }}
                     value={props.inputValue ?? ""}
@@ -608,7 +671,10 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
           <Show when={props.isPendingDismiss}>
             <DiscardPrompt
               onConfirm={props.onConfirmDismiss}
-              onCancel={props.onCancelDismiss}
+              onCancel={() => {
+                props.onCancelDismiss?.();
+                inputRef?.focus({ preventScroll: true });
+              }}
             />
           </Show>
 

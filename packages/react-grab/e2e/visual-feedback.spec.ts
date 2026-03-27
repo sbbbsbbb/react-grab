@@ -154,51 +154,6 @@ test.describe("Visual Feedback", () => {
     });
   });
 
-  test.describe("Crosshair", () => {
-    test("crosshair should be visible when active", async ({ reactGrab }) => {
-      await reactGrab.activate();
-      await reactGrab.page.mouse.move(400, 400);
-      await reactGrab.page.waitForTimeout(100);
-
-      const isVisible = await reactGrab.isCrosshairVisible();
-      expect(isVisible).toBe(true);
-    });
-
-    test("crosshair should follow cursor", async ({ reactGrab }) => {
-      await reactGrab.activate();
-
-      await reactGrab.page.mouse.move(200, 200);
-      await reactGrab.page.waitForTimeout(100);
-      const info1 = await reactGrab.getCrosshairInfo();
-
-      await reactGrab.page.mouse.move(500, 400);
-      await reactGrab.page.waitForTimeout(100);
-      const info2 = await reactGrab.getCrosshairInfo();
-
-      if (info1.position && info2.position) {
-        expect(info1.position.x).not.toBe(info2.position.x);
-        expect(info1.position.y).not.toBe(info2.position.y);
-      }
-    });
-
-    test("crosshair should be hidden during drag", async ({ reactGrab }) => {
-      await reactGrab.activate();
-
-      const listItem = reactGrab.page.locator("li").first();
-      const box = await listItem.boundingBox();
-      if (!box) throw new Error("Could not get bounding box");
-
-      await reactGrab.page.mouse.move(box.x, box.y);
-      await reactGrab.page.mouse.down();
-      await reactGrab.page.mouse.move(box.x + 100, box.y + 100, { steps: 5 });
-
-      const state = await reactGrab.getState();
-      expect(state.isDragging).toBe(true);
-
-      await reactGrab.page.mouse.up();
-    });
-  });
-
   test.describe("Selection Label", () => {
     test("label should show tag name", async ({ reactGrab }) => {
       await reactGrab.activate();
@@ -253,19 +208,21 @@ test.describe("Visual Feedback", () => {
       await reactGrab.waitForSelectionBox();
       await reactGrab.waitForSelectionLabel();
 
-      const bounds = await reactGrab.getSelectionLabelBounds();
-      expect(bounds).not.toBeNull();
-      expect(bounds?.arrow).not.toBeNull();
-      if (bounds?.arrow) {
-        expect(bounds.label.x).toBeGreaterThanOrEqual(0);
-        expect(bounds.label.x + bounds.label.width).toBeLessThanOrEqual(
-          bounds.viewport.width,
-        );
-        expect(bounds.arrow.x).toBeGreaterThanOrEqual(bounds.label.x);
-        expect(bounds.arrow.x + bounds.arrow.width).toBeLessThanOrEqual(
-          bounds.label.x + bounds.label.width,
-        );
-      }
+      await expect(async () => {
+        const bounds = await reactGrab.getSelectionLabelBounds();
+        expect(bounds).not.toBeNull();
+        expect(bounds?.arrow).not.toBeNull();
+        if (bounds?.arrow) {
+          expect(bounds.label.x).toBeGreaterThanOrEqual(0);
+          expect(bounds.label.x + bounds.label.width).toBeLessThanOrEqual(
+            bounds.viewport.width,
+          );
+          expect(bounds.arrow.x).toBeGreaterThanOrEqual(bounds.label.x);
+          expect(bounds.arrow.x + bounds.arrow.width).toBeLessThanOrEqual(
+            bounds.label.x + bounds.label.width,
+          );
+        }
+      }).toPass({ timeout: 2000 });
     });
 
     test("label and arrow should stay within bounds at right edge", async ({
@@ -276,19 +233,21 @@ test.describe("Visual Feedback", () => {
       await reactGrab.waitForSelectionBox();
       await reactGrab.waitForSelectionLabel();
 
-      const bounds = await reactGrab.getSelectionLabelBounds();
-      expect(bounds).not.toBeNull();
-      expect(bounds?.arrow).not.toBeNull();
-      if (bounds?.arrow) {
-        expect(bounds.label.x).toBeGreaterThanOrEqual(0);
-        expect(bounds.label.x + bounds.label.width).toBeLessThanOrEqual(
-          bounds.viewport.width,
-        );
-        expect(bounds.arrow.x).toBeGreaterThanOrEqual(bounds.label.x);
-        expect(bounds.arrow.x + bounds.arrow.width).toBeLessThanOrEqual(
-          bounds.label.x + bounds.label.width,
-        );
-      }
+      await expect(async () => {
+        const bounds = await reactGrab.getSelectionLabelBounds();
+        expect(bounds).not.toBeNull();
+        expect(bounds?.arrow).not.toBeNull();
+        if (bounds?.arrow) {
+          expect(bounds.label.x).toBeGreaterThanOrEqual(0);
+          expect(bounds.label.x + bounds.label.width).toBeLessThanOrEqual(
+            bounds.viewport.width,
+          );
+          expect(bounds.arrow.x).toBeGreaterThanOrEqual(bounds.label.x);
+          expect(bounds.arrow.x + bounds.arrow.width).toBeLessThanOrEqual(
+            bounds.label.x + bounds.label.width,
+          );
+        }
+      }).toPass({ timeout: 2000 });
     });
 
     test("label and arrow should stay within bounds at bottom-left edge", async ({
@@ -299,19 +258,21 @@ test.describe("Visual Feedback", () => {
       await reactGrab.waitForSelectionBox();
       await reactGrab.waitForSelectionLabel();
 
-      const bounds = await reactGrab.getSelectionLabelBounds();
-      expect(bounds).not.toBeNull();
-      expect(bounds?.arrow).not.toBeNull();
-      if (bounds?.arrow) {
-        expect(bounds.label.x).toBeGreaterThanOrEqual(0);
-        expect(bounds.label.x + bounds.label.width).toBeLessThanOrEqual(
-          bounds.viewport.width,
-        );
-        expect(bounds.arrow.x).toBeGreaterThanOrEqual(bounds.label.x);
-        expect(bounds.arrow.x + bounds.arrow.width).toBeLessThanOrEqual(
-          bounds.label.x + bounds.label.width,
-        );
-      }
+      await expect(async () => {
+        const bounds = await reactGrab.getSelectionLabelBounds();
+        expect(bounds).not.toBeNull();
+        expect(bounds?.arrow).not.toBeNull();
+        if (bounds?.arrow) {
+          expect(bounds.label.x).toBeGreaterThanOrEqual(0);
+          expect(bounds.label.x + bounds.label.width).toBeLessThanOrEqual(
+            bounds.viewport.width,
+          );
+          expect(bounds.arrow.x).toBeGreaterThanOrEqual(bounds.label.x);
+          expect(bounds.arrow.x + bounds.arrow.width).toBeLessThanOrEqual(
+            bounds.label.x + bounds.label.width,
+          );
+        }
+      }).toPass({ timeout: 2000 });
     });
   });
 

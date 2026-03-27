@@ -6,6 +6,7 @@ import {
   VISIBILITY_CACHE_TTL_MS,
 } from "../constants.js";
 import { isElementVisible } from "./is-element-visible.js";
+import { isRootElement } from "./is-root-element.js";
 
 const isReactGrabElement = (element: Element): boolean => {
   if (element.hasAttribute("data-react-grab")) return true;
@@ -78,6 +79,10 @@ export const clearVisibilityCache = (): void => {
 };
 
 export const isValidGrabbableElement = (element: Element): boolean => {
+  if (isRootElement(element)) {
+    return false;
+  }
+
   if (isReactGrabElement(element)) {
     return false;
   }
@@ -95,17 +100,26 @@ export const isValidGrabbableElement = (element: Element): boolean => {
 
   const computedStyle = window.getComputedStyle(element);
 
-  if (isDevToolsOverlay(computedStyle)) {
-    return false;
-  }
-
-  if (isFullViewportOverlay(element, computedStyle)) {
-    return false;
-  }
-
   const isVisible = isElementVisible(element, computedStyle);
+  if (!isVisible) {
+    visibilityCache.set(element, { isVisible: false, timestamp: now });
+    return false;
+  }
 
-  visibilityCache.set(element, { isVisible, timestamp: now });
+  const couldBeOverlay =
+    element.clientWidth / window.innerWidth >= VIEWPORT_COVERAGE_THRESHOLD &&
+    element.clientHeight / window.innerHeight >= VIEWPORT_COVERAGE_THRESHOLD;
 
-  return isVisible;
+  if (couldBeOverlay) {
+    if (isDevToolsOverlay(computedStyle)) {
+      return false;
+    }
+    if (isFullViewportOverlay(element, computedStyle)) {
+      return false;
+    }
+  }
+
+  visibilityCache.set(element, { isVisible: true, timestamp: now });
+
+  return true;
 };

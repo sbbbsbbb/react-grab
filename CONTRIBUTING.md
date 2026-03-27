@@ -43,45 +43,24 @@ packages/
 ├── react-grab/          # Core library
 ├── grab/                # Bundled package (library + CLI, published as `grab`)
 ├── cli/                 # CLI implementation (@react-grab/cli)
-├── provider-cursor/     # Cursor agent integration
-├── provider-claude-code/  # Claude Code integration
-├── provider-opencode/   # OpenCode integration
-├── provider-codex/      # OpenAI Codex integration
-├── provider-gemini/     # Google Gemini CLI integration
-├── provider-amp/        # Amp SDK integration
-├── provider-ami/        # AMI client
+├── mcp/                 # MCP server (@react-grab/mcp)
 ├── website/             # Documentation site (react-grab.com)
-├── vite-playground/     # Vite development playground
-├── next-playground/     # Next.js development playground
-├── agent-playground/    # Agent testing playground
-├── benchmarks/          # Performance benchmarks
+├── e2e-app/             # E2E test target app (Vite)
+├── gym/                 # Agent testing playground
 └── web-extension/       # Browser extension
 ```
 
 ## Development Workflow
 
-### Running Playgrounds
+### Running the Gym
 
-Test your changes in the playgrounds:
+Test the MCP agent integration in the gym:
 
 ```bash
-# Vite playground
-pnpm --filter vite-playground dev
-
-# Next.js playground
-pnpm --filter next-playground dev
-
-# Agent playground (for testing agent provider integrations)
-pnpm --filter @react-grab/agent-playground dev:claude   # Claude Code
-pnpm --filter @react-grab/agent-playground dev:cursor   # Cursor
-pnpm --filter @react-grab/agent-playground dev:opencode # OpenCode
-pnpm --filter @react-grab/agent-playground dev:codex    # Codex
-pnpm --filter @react-grab/agent-playground dev:gemini   # Gemini
-pnpm --filter @react-grab/agent-playground dev:amp      # Amp
-pnpm --filter @react-grab/agent-playground dev:ami      # Ami
+pnpm --filter @react-grab/gym dev:mcp
 ```
 
-The agent playground runs at `http://localhost:5174` and lets you test react-grab's agent provider API with multiple backends.
+The gym runs at `http://localhost:5174` and lets you test react-grab's agent integration via MCP.
 
 ### Running Tests
 
@@ -95,7 +74,7 @@ pnpm --filter @react-grab/cli test
 ```bash
 nr lint        # Check for lint errors
 nr lint:fix    # Fix lint errors
-nr format      # Format code with Prettier
+nr format      # Format code with oxfmt
 ```
 
 ## Code Style

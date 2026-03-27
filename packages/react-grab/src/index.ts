@@ -5,18 +5,9 @@ export {
   isInstrumentationActive,
   DEFAULT_THEME,
 } from "./core/index.js";
-export { screenshotPlugin } from "./core/plugins/screenshot.js";
-export { copyHtmlPlugin } from "./core/plugins/copy-html.js";
-export { openPlugin } from "./core/plugins/open.js";
 export { commentPlugin } from "./core/plugins/comment.js";
+export { openPlugin } from "./core/plugins/open.js";
 export { generateSnippet } from "./utils/generate-snippet.js";
-export {
-  captureElementScreenshot,
-  copyImageToClipboard,
-  combineBounds,
-} from "./utils/capture-screenshot.js";
-export type { ElementBounds } from "./utils/capture-screenshot.js";
-export { isScreenshotSupported } from "./utils/is-screenshot-supported.js";
 export type {
   Options,
   ReactGrabAPI,
@@ -28,10 +19,10 @@ export type {
   GrabbedBox,
   DragRect,
   Rect,
+  Position,
   DeepPartial,
   ElementLabelVariant,
   PromptModeContext,
-  CrosshairContext,
   ElementLabelContext,
   AgentContext,
   AgentSession,
@@ -51,11 +42,12 @@ export type {
 } from "./types.js";
 
 import { init } from "./core/index.js";
-import type { ReactGrabAPI } from "./types.js";
+import type { Plugin, ReactGrabAPI } from "./types.js";
 
 declare global {
   interface Window {
     __REACT_GRAB__?: ReactGrabAPI;
+    __REACT_GRAB_DISABLED__?: boolean;
   }
 }
 
@@ -77,13 +69,48 @@ export const setGlobalApi = (api: ReactGrabAPI | null): void => {
   }
 };
 
-if (typeof window !== "undefined") {
+const pendingPlugins: Plugin[] = [];
+
+const flushPendingPlugins = (api: ReactGrabAPI): void => {
+  while (pendingPlugins.length > 0) {
+    const plugin = pendingPlugins.shift();
+    if (plugin) {
+      api.registerPlugin(plugin);
+    }
+  }
+};
+
+export const registerPlugin = (plugin: Plugin): void => {
+  const api = getGlobalApi();
+  if (api) {
+    api.registerPlugin(plugin);
+    return;
+  }
+  pendingPlugins.push(plugin);
+};
+
+export const unregisterPlugin = (name: string): void => {
+  const api = getGlobalApi();
+  if (api) {
+    api.unregisterPlugin(name);
+    return;
+  }
+  const pendingIndex = pendingPlugins.findIndex(
+    (pendingPlugin) => pendingPlugin.name === name,
+  );
+  if (pendingIndex !== -1) {
+    pendingPlugins.splice(pendingIndex, 1);
+  }
+};
+
+if (typeof window !== "undefined" && !window.__REACT_GRAB_DISABLED__) {
   if (window.__REACT_GRAB__) {
     globalApi = window.__REACT_GRAB__;
   } else {
     globalApi = init();
     window.__REACT_GRAB__ = globalApi;
   }
+  flushPendingPlugins(globalApi);
   window.dispatchEvent(
     new CustomEvent("react-grab:init", { detail: globalApi }),
   );

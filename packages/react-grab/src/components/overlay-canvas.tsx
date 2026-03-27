@@ -14,12 +14,31 @@ import {
   FADE_OUT_BUFFER_MS,
   MIN_DEVICE_PIXEL_RATIO,
   Z_INDEX_OVERLAY_CANVAS,
-  OVERLAY_CROSSHAIR_COLOR,
   OVERLAY_BORDER_COLOR_DRAG,
   OVERLAY_FILL_COLOR_DRAG,
+  OPACITY_CONVERGENCE_THRESHOLD,
   OVERLAY_BORDER_COLOR_DEFAULT,
   OVERLAY_FILL_COLOR_DEFAULT,
+  OVERLAY_BORDER_COLOR_INSPECT,
+  OVERLAY_FILL_COLOR_INSPECT,
 } from "../constants.js";
+import {
+  nativeCancelAnimationFrame,
+  nativeRequestAnimationFrame,
+} from "../utils/native-raf.js";
+import { supportsDisplayP3 } from "../utils/supports-display-p3.js";
+
+const DEFAULT_LAYER_STYLE = {
+  borderColor: OVERLAY_BORDER_COLOR_DEFAULT,
+  fillColor: OVERLAY_FILL_COLOR_DEFAULT,
+  lerpFactor: SELECTION_LERP_FACTOR,
+} as const;
+
+const INSPECT_LAYER_STYLE = {
+  borderColor: OVERLAY_BORDER_COLOR_INSPECT,
+  fillColor: OVERLAY_FILL_COLOR_INSPECT,
+  lerpFactor: SELECTION_LERP_FACTOR,
+} as const;
 
 const LAYER_STYLES = {
   drag: {
@@ -27,24 +46,13 @@ const LAYER_STYLES = {
     fillColor: OVERLAY_FILL_COLOR_DRAG,
     lerpFactor: DRAG_LERP_FACTOR,
   },
-  selection: {
-    borderColor: OVERLAY_BORDER_COLOR_DEFAULT,
-    fillColor: OVERLAY_FILL_COLOR_DEFAULT,
-    lerpFactor: SELECTION_LERP_FACTOR,
-  },
-  grabbed: {
-    borderColor: OVERLAY_BORDER_COLOR_DEFAULT,
-    fillColor: OVERLAY_FILL_COLOR_DEFAULT,
-    lerpFactor: SELECTION_LERP_FACTOR,
-  },
-  processing: {
-    borderColor: OVERLAY_BORDER_COLOR_DEFAULT,
-    fillColor: OVERLAY_FILL_COLOR_DEFAULT,
-    lerpFactor: SELECTION_LERP_FACTOR,
-  },
+  selection: DEFAULT_LAYER_STYLE,
+  grabbed: DEFAULT_LAYER_STYLE,
+  processing: DEFAULT_LAYER_STYLE,
+  inspect: INSPECT_LAYER_STYLE,
 } as const;
 
-type LayerName = "crosshair" | "drag" | "selection" | "grabbed" | "processing";
+type LayerName = "drag" | "selection" | "grabbed" | "processing" | "inspect";
 
 interface OffscreenLayer {
   canvas: OffscreenCanvas | null;
@@ -62,21 +70,15 @@ interface AnimatedBounds {
   isInitialized: boolean;
 }
 
-interface Position {
-  x: number;
-  y: number;
-}
-
 export interface OverlayCanvasProps {
-  crosshairVisible?: boolean;
-  mouseX?: number;
-  mouseY?: number;
-
   selectionVisible?: boolean;
   selectionBounds?: OverlayBounds;
   selectionBoundsMultiple?: OverlayBounds[];
   selectionIsFading?: boolean;
   selectionShouldSnap?: boolean;
+
+  inspectVisible?: boolean;
+  inspectBounds?: OverlayBounds[];
 
   dragVisible?: boolean;
   dragBounds?: OverlayBounds;
@@ -101,19 +103,22 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
   let animationFrameId: number | null = null;
 
   const layers: Record<LayerName, OffscreenLayer> = {
-    crosshair: { canvas: null, context: null },
     drag: { canvas: null, context: null },
     selection: { canvas: null, context: null },
     grabbed: { canvas: null, context: null },
     processing: { canvas: null, context: null },
+    inspect: { canvas: null, context: null },
   };
-
-  const crosshairCurrentPosition: Position = { x: 0, y: 0 };
 
   let selectionAnimations: AnimatedBounds[] = [];
   let dragAnimation: AnimatedBounds | null = null;
   let grabbedAnimations: AnimatedBounds[] = [];
   let processingAnimations: AnimatedBounds[] = [];
+  let inspectAnimations: AnimatedBounds[] = [];
+
+  const canvasColorSpace: PredefinedColorSpace = supportsDisplayP3()
+    ? "display-p3"
+    : "srgb";
 
   const createOffscreenLayer = (
     layerWidth: number,
@@ -124,7 +129,7 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
       layerWidth * scaleFactor,
       layerHeight * scaleFactor,
     );
-    const context = canvas.getContext("2d");
+    const context = canvas.getContext("2d", { colorSpace: canvasColorSpace });
     if (context) {
       context.scale(scaleFactor, scaleFactor);
     }
@@ -146,7 +151,7 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
     canvasRef.style.width = `${canvasWidth}px`;
     canvasRef.style.height = `${canvasHeight}px`;
 
-    mainContext = canvasRef.getContext("2d");
+    mainContext = canvasRef.getContext("2d", { colorSpace: canvasColorSpace });
     if (mainContext) {
       mainContext.scale(devicePixelRatio, devicePixelRatio);
     }
@@ -249,26 +254,6 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
     context.globalAlpha = 1;
   };
 
-  const renderCrosshairLayer = () => {
-    const layer = layers.crosshair;
-    if (!layer.context) return;
-
-    const context = layer.context;
-    context.clearRect(0, 0, canvasWidth, canvasHeight);
-
-    if (!props.crosshairVisible) return;
-
-    context.strokeStyle = OVERLAY_CROSSHAIR_COLOR;
-    context.lineWidth = 1;
-
-    context.beginPath();
-    context.moveTo(crosshairCurrentPosition.x, 0);
-    context.lineTo(crosshairCurrentPosition.x, canvasHeight);
-    context.moveTo(0, crosshairCurrentPosition.y);
-    context.lineTo(canvasWidth, crosshairCurrentPosition.y);
-    context.stroke();
-  };
-
   const renderDragLayer = () => {
     const layer = layers.drag;
     if (!layer.context) return;
@@ -318,40 +303,19 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
     }
   };
 
-  const renderGrabbedLayer = () => {
-    const layer = layers.grabbed;
+  const renderBoundsLayer = (
+    layerName: keyof typeof LAYER_STYLES,
+    animations: AnimatedBounds[],
+  ) => {
+    const layer = layers[layerName];
     if (!layer.context) return;
 
     const context = layer.context;
     context.clearRect(0, 0, canvasWidth, canvasHeight);
 
-    const style = LAYER_STYLES.grabbed;
+    const style = LAYER_STYLES[layerName];
 
-    for (const animation of grabbedAnimations) {
-      drawRoundedRectangle(
-        context,
-        animation.current.x,
-        animation.current.y,
-        animation.current.width,
-        animation.current.height,
-        animation.borderRadius,
-        style.fillColor,
-        style.borderColor,
-        animation.opacity,
-      );
-    }
-  };
-
-  const renderProcessingLayer = () => {
-    const layer = layers.processing;
-    if (!layer.context) return;
-
-    const context = layer.context;
-    context.clearRect(0, 0, canvasWidth, canvasHeight);
-
-    const style = LAYER_STYLES.processing;
-
-    for (const animation of processingAnimations) {
+    for (const animation of animations) {
       drawRoundedRectangle(
         context,
         animation.current.x,
@@ -373,14 +337,14 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
     mainContext.clearRect(0, 0, canvasRef.width, canvasRef.height);
     mainContext.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
 
-    renderCrosshairLayer();
     renderDragLayer();
     renderSelectionLayer();
-    renderGrabbedLayer();
-    renderProcessingLayer();
+    renderBoundsLayer("grabbed", grabbedAnimations);
+    renderBoundsLayer("processing", processingAnimations);
+    renderBoundsLayer("inspect", inspectAnimations);
 
     const layerRenderOrder: LayerName[] = [
-      "crosshair",
+      "inspect",
       "drag",
       "selection",
       "grabbed",
@@ -436,7 +400,7 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
         animation.targetOpacity,
         lerpFactor,
       );
-      const opacityThreshold = 0.01;
+      const opacityThreshold = OPACITY_CONVERGENCE_THRESHOLD;
       hasOpacityConverged =
         Math.abs(lerpedOpacity - animation.targetOpacity) < opacityThreshold;
       animation.opacity = hasOpacityConverged
@@ -499,7 +463,8 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
 
       if (isLabelAnimation) {
         const hasOpacityConverged =
-          Math.abs(animation.opacity - animation.targetOpacity) < 0.01;
+          Math.abs(animation.opacity - animation.targetOpacity) <
+          OPACITY_CONVERGENCE_THRESHOLD;
         if (hasOpacityConverged && animation.targetOpacity === 0) {
           return false;
         }
@@ -517,10 +482,18 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
       }
     }
 
+    for (const animation of inspectAnimations) {
+      if (animation.isInitialized) {
+        if (interpolateBounds(animation, LAYER_STYLES.inspect.lerpFactor)) {
+          shouldContinueAnimating = true;
+        }
+      }
+    }
+
     compositeAllLayers();
 
     if (shouldContinueAnimating) {
-      animationFrameId = requestAnimationFrame(runAnimationFrame);
+      animationFrameId = nativeRequestAnimationFrame(runAnimationFrame);
     } else {
       animationFrameId = null;
     }
@@ -528,36 +501,13 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
 
   const scheduleAnimationFrame = () => {
     if (animationFrameId !== null) return;
-    animationFrameId = requestAnimationFrame(runAnimationFrame);
+    animationFrameId = nativeRequestAnimationFrame(runAnimationFrame);
   };
 
   const handleWindowResize = () => {
     initializeCanvas();
     scheduleAnimationFrame();
   };
-
-  createEffect(
-    on(
-      () => [props.mouseX, props.mouseY] as const,
-      ([mouseX, mouseY]) => {
-        const targetX = mouseX ?? 0;
-        const targetY = mouseY ?? 0;
-
-        crosshairCurrentPosition.x = targetX;
-        crosshairCurrentPosition.y = targetY;
-        scheduleAnimationFrame();
-      },
-    ),
-  );
-
-  createEffect(
-    on(
-      () => props.crosshairVisible,
-      () => {
-        scheduleAnimationFrame();
-      },
-    ),
-  );
 
   createEffect(
     on(
@@ -579,12 +529,14 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
           return;
         }
 
-        const boundsToRender =
-          multipleBounds && multipleBounds.length > 0
-            ? multipleBounds
-            : singleBounds
-              ? [singleBounds]
-              : [];
+        let boundsToRender: readonly OverlayBounds[];
+        if (multipleBounds && multipleBounds.length > 0) {
+          boundsToRender = multipleBounds;
+        } else if (singleBounds) {
+          boundsToRender = [singleBounds];
+        } else {
+          boundsToRender = [];
+        }
 
         selectionAnimations = boundsToRender.map((bounds, index) => {
           const animationId = `selection-${index}`;
@@ -631,8 +583,8 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
 
   createEffect(
     on(
-      () => props.grabbedBoxes,
-      (grabbedBoxes) => {
+      () => [props.grabbedBoxes, props.labelInstances] as const,
+      ([grabbedBoxes, labelInstances]) => {
         const boxesToProcess = grabbedBoxes ?? [];
         const activeBoxIds = new Set(boxesToProcess.map((box) => box.id));
         const existingAnimationIds = new Set(
@@ -658,9 +610,43 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
           }
         }
 
+        const instancesToProcess = labelInstances ?? [];
+
+        for (const instance of instancesToProcess) {
+          const boundsToRender = resolveBoundsArray(instance);
+          const targetOpacity = instance.status === "fading" ? 0 : 1;
+
+          for (let index = 0; index < boundsToRender.length; index++) {
+            const bounds = boundsToRender[index];
+            const animationId = `label-${instance.id}-${index}`;
+            const existingAnimation = grabbedAnimations.find(
+              (animation) => animation.id === animationId,
+            );
+
+            if (existingAnimation) {
+              updateAnimationTarget(existingAnimation, bounds, targetOpacity);
+            } else {
+              grabbedAnimations.push(
+                createAnimatedBounds(animationId, bounds, {
+                  opacity: 1,
+                  targetOpacity,
+                }),
+              );
+            }
+          }
+        }
+
+        const activeLabelIds = new Set<string>();
+        for (const instance of instancesToProcess) {
+          const boundsToRender = resolveBoundsArray(instance);
+          for (let index = 0; index < boundsToRender.length; index++) {
+            activeLabelIds.add(`label-${instance.id}-${index}`);
+          }
+        }
+
         grabbedAnimations = grabbedAnimations.filter((animation) => {
           if (animation.id.startsWith("label-")) {
-            return true;
+            return activeLabelIds.has(animation.id);
           }
           return activeBoxIds.has(animation.id);
         });
@@ -707,47 +693,26 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
 
   createEffect(
     on(
-      () => props.labelInstances,
-      (labelInstances) => {
-        const instancesToProcess = labelInstances ?? [];
-
-        for (const instance of instancesToProcess) {
-          const boundsToRender = resolveBoundsArray(instance);
-          const targetOpacity = instance.status === "fading" ? 0 : 1;
-
-          for (let index = 0; index < boundsToRender.length; index++) {
-            const bounds = boundsToRender[index];
-            const animationId = `label-${instance.id}-${index}`;
-            const existingAnimation = grabbedAnimations.find(
-              (animation) => animation.id === animationId,
-            );
-
-            if (existingAnimation) {
-              updateAnimationTarget(existingAnimation, bounds, targetOpacity);
-            } else {
-              grabbedAnimations.push(
-                createAnimatedBounds(animationId, bounds, {
-                  opacity: 1,
-                  targetOpacity,
-                }),
-              );
-            }
-          }
+      () => [props.inspectVisible, props.inspectBounds] as const,
+      ([isVisible, bounds]) => {
+        if (!isVisible || !bounds || bounds.length === 0) {
+          inspectAnimations = [];
+          scheduleAnimationFrame();
+          return;
         }
 
-        const activeLabelIds = new Set<string>();
-        for (const instance of instancesToProcess) {
-          const boundsToRender = resolveBoundsArray(instance);
-          for (let index = 0; index < boundsToRender.length; index++) {
-            activeLabelIds.add(`label-${instance.id}-${index}`);
-          }
-        }
+        inspectAnimations = bounds.map((ancestorBounds, index) => {
+          const animationId = `inspect-${index}`;
+          const existingAnimation = inspectAnimations.find(
+            (animation) => animation.id === animationId,
+          );
 
-        grabbedAnimations = grabbedAnimations.filter((animation) => {
-          if (animation.id.startsWith("label-")) {
-            return activeLabelIds.has(animation.id);
+          if (existingAnimation) {
+            updateAnimationTarget(existingAnimation, ancestorBounds);
+            return existingAnimation;
           }
-          return true;
+
+          return createAnimatedBounds(animationId, ancestorBounds);
         });
 
         scheduleAnimationFrame();
@@ -801,7 +766,7 @@ export const OverlayCanvas: Component<OverlayCanvasProps> = (props) => {
         );
       }
       if (animationFrameId !== null) {
-        cancelAnimationFrame(animationFrameId);
+        nativeCancelAnimationFrame(animationFrameId);
       }
     });
   });

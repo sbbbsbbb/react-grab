@@ -1,10 +1,10 @@
 import {
-  isSourceFile,
-  normalizeFileName,
-  getOwnerStack,
-  StackFrame,
-} from "bippy/source";
-import { isCapitalized } from "../utils/is-capitalized.js";
+  getReactStack,
+  resolveStack,
+  formatStack,
+  checkIsNextProject,
+  resolveComponentName,
+} from "element-source";
 import {
   getFiberFromHostInstance,
   isInstrumentationActive,
@@ -17,9 +17,27 @@ import {
   PREVIEW_ATTR_VALUE_MAX_LENGTH,
   PREVIEW_MAX_ATTRS,
   PREVIEW_PRIORITY_ATTRS,
+  DEFAULT_MAX_CONTEXT_LINES,
 } from "../constants.js";
 import { getTagName } from "../utils/get-tag-name.js";
 import { truncateString } from "../utils/truncate-string.js";
+
+export {
+  checkIsNextProject,
+  getReactStack as getStack,
+  resolveComponentName as getNearestComponentName,
+};
+
+const NON_COMPONENT_PREFIXES = new Set([
+  "_",
+  "$",
+  "motion.",
+  "styled.",
+  "chakra.",
+  "ark.",
+  "Primitive.",
+  "Slot.",
+]);
 
 const NEXT_INTERNAL_COMPONENT_NAMES = new Set([
   "InnerLayoutRouter",
@@ -57,105 +75,31 @@ const REACT_INTERNAL_COMPONENT_NAMES = new Set([
   "SuspenseList",
 ]);
 
-const checkIsNextProject = (): boolean => {
-  if (typeof document === "undefined") return false;
-  return Boolean(
-    document.getElementById("__NEXT_DATA__") ||
-    document.querySelector("nextjs-portal"),
-  );
-};
-
-const checkIsInternalComponentName = (name: string): boolean => {
-  if (name.startsWith("_")) return true;
-  if (NEXT_INTERNAL_COMPONENT_NAMES.has(name)) return true;
-  if (REACT_INTERNAL_COMPONENT_NAMES.has(name)) return true;
-  return false;
-};
-
-export const checkIsSourceComponentName = (name: string): boolean => {
-  if (name.length <= 1) return false;
-  if (checkIsInternalComponentName(name)) return false;
-  if (!isCapitalized(name)) return false;
-  if (name.startsWith("Primitive.")) return false;
-  if (name.includes("Provider") && name.includes("Context")) return false;
-  return true;
-};
-
-const stackCache = new WeakMap<Element, Promise<StackFrame[] | null>>();
-
-const fetchStackForElement = async (
-  element: Element,
-): Promise<StackFrame[] | null> => {
-  try {
-    const fiber = getFiberFromHostInstance(element);
-    if (!fiber) return null;
-    return await getOwnerStack(fiber);
-  } catch {
-    return null;
-  }
-};
-
-export const getStack = (element: Element): Promise<StackFrame[] | null> => {
-  if (!isInstrumentationActive()) return Promise.resolve([]);
-
-  const cached = stackCache.get(element);
-  if (cached) return cached;
-
-  const promise = fetchStackForElement(element);
-  stackCache.set(element, promise);
-  return promise;
-};
-
-export const getNearestComponentName = async (
-  element: Element,
-): Promise<string | null> => {
-  if (!isInstrumentationActive()) return null;
-  const stack = await getStack(element);
-  if (!stack) return null;
-
-  for (const frame of stack) {
-    if (frame.functionName && checkIsSourceComponentName(frame.functionName)) {
-      return frame.functionName;
-    }
-  }
-
-  return null;
-};
-
-export const resolveSourceFromStack = (
-  stack: StackFrame[] | null,
-): {
-  filePath: string;
-  lineNumber: number | undefined;
-  componentName: string | null;
-} | null => {
-  if (!stack || stack.length === 0) return null;
-  for (const frame of stack) {
-    if (frame.fileName && isSourceFile(frame.fileName)) {
-      return {
-        filePath: normalizeFileName(frame.fileName),
-        lineNumber: frame.lineNumber,
-        componentName:
-          frame.functionName && checkIsSourceComponentName(frame.functionName)
-            ? frame.functionName
-            : null,
-      };
-    }
-  }
-  return null;
-};
-
 const isUsefulComponentName = (name: string): boolean => {
   if (!name) return false;
-  if (checkIsInternalComponentName(name)) return false;
-  if (name.startsWith("Primitive.")) return false;
+  if (NEXT_INTERNAL_COMPONENT_NAMES.has(name)) return false;
+  if (REACT_INTERNAL_COMPONENT_NAMES.has(name)) return false;
+  for (const prefix of NON_COMPONENT_PREFIXES) {
+    if (name.startsWith(prefix)) return false;
+  }
   if (name === "SlotClone" || name === "Slot") return false;
   return true;
 };
 
+const findNearestFiberElement = (element: Element): Element => {
+  if (!isInstrumentationActive()) return element;
+  let current: Element | null = element;
+  while (current) {
+    if (getFiberFromHostInstance(current)) return current;
+    current = current.parentElement;
+  }
+  return element;
+};
+
 export const getComponentDisplayName = (element: Element): string | null => {
   if (!isInstrumentationActive()) return null;
-  const fiber = getFiberFromHostInstance(element);
+  const resolvedElement = findNearestFiberElement(element);
+  const fiber = getFiberFromHostInstance(resolvedElement);
   if (!fiber) return null;
 
   let currentFiber = fiber.return;
@@ -172,17 +116,9 @@ export const getComponentDisplayName = (element: Element): string | null => {
   return null;
 };
 
-interface GetElementContextOptions {
+interface StackContextOptions {
   maxLines?: number;
 }
-
-const hasSourceFiles = (stack: StackFrame[] | null): boolean => {
-  if (!stack) return false;
-  return stack.some(
-    (frame) =>
-      frame.isServer || (frame.fileName && isSourceFile(frame.fileName)),
-  );
-};
 
 const getComponentNamesFromFiber = (
   element: Element,
@@ -210,70 +146,38 @@ const getComponentNamesFromFiber = (
   return componentNames;
 };
 
-export const getElementContext = async (
+export const getStackContext = async (
   element: Element,
-  options: GetElementContextOptions = {},
+  options: StackContextOptions = {},
 ): Promise<string> => {
-  const { maxLines = 3 } = options;
-  const stack = await getStack(element);
-  const html = getHTMLPreview(element);
+  const maxLines = options.maxLines ?? DEFAULT_MAX_CONTEXT_LINES;
+  const stack = await resolveStack(element);
 
-  if (hasSourceFiles(stack)) {
-    const isNextProject = checkIsNextProject();
-    const stackContext: string[] = [];
-
-    if (stack) {
-      for (const frame of stack) {
-        if (stackContext.length >= maxLines) break;
-
-        if (
-          frame.isServer &&
-          (!frame.functionName ||
-            checkIsSourceComponentName(frame.functionName))
-        ) {
-          stackContext.push(
-            `\n  in ${frame.functionName || "<anonymous>"} (at Server)`,
-          );
-          continue;
-        }
-        if (frame.fileName && isSourceFile(frame.fileName)) {
-          let line = "\n  in ";
-          const hasComponentName =
-            frame.functionName &&
-            checkIsSourceComponentName(frame.functionName);
-
-          if (hasComponentName) {
-            line += `${frame.functionName} (at `;
-          }
-
-          line += normalizeFileName(frame.fileName);
-
-          // HACK: bundlers like vite mess up the line number and column number
-          if (isNextProject && frame.lineNumber && frame.columnNumber) {
-            line += `:${frame.lineNumber}:${frame.columnNumber}`;
-          }
-
-          if (hasComponentName) {
-            line += `)`;
-          }
-
-          stackContext.push(line);
-        }
-      }
-    }
-
-    return `${html}${stackContext.join("")}`;
+  if (stack.length > 0) {
+    return formatStack(stack, maxLines);
   }
 
   const componentNames = getComponentNamesFromFiber(element, maxLines);
   if (componentNames.length > 0) {
-    const componentContext = componentNames
-      .map((name) => `\n  in ${name}`)
-      .join("");
-    return `${html}${componentContext}`;
+    return componentNames.map((name) => `\n  in ${name}`).join("");
   }
 
-  return getFallbackContext(element);
+  return "";
+};
+
+export const getElementContext = async (
+  element: Element,
+  options: StackContextOptions = {},
+): Promise<string> => {
+  const resolvedElement = findNearestFiberElement(element);
+  const html = getHTMLPreview(resolvedElement);
+  const stackContext = await getStackContext(resolvedElement, options);
+
+  if (stackContext) {
+    return `${html}${stackContext}`;
+  }
+
+  return getFallbackContext(resolvedElement);
 };
 
 const getFallbackContext = (element: Element): string => {
@@ -329,13 +233,12 @@ const formatPriorityAttrs = (
   return priorityAttrs.length > 0 ? ` ${priorityAttrs.join(" ")}` : "";
 };
 
-const getHTMLPreview = (element: Element): string => {
+export const getHTMLPreview = (element: Element): string => {
   const tagName = getTagName(element);
-  if (!(element instanceof HTMLElement)) {
-    const attrsHint = formatPriorityAttrs(element);
-    return `<${tagName}${attrsHint} />`;
-  }
-  const text = element.innerText?.trim() ?? element.textContent?.trim() ?? "";
+  const text =
+    element instanceof HTMLElement
+      ? (element.innerText?.trim() ?? element.textContent?.trim() ?? "")
+      : (element.textContent?.trim() ?? "");
 
   let attrsText = "";
   for (const { name, value } of element.attributes) {
