@@ -15,9 +15,7 @@ test.describe("Element Context Fallback", () => {
       expect(clipboard).toContain("TodoList");
     });
 
-    test("should include HTML preview with tag and content", async ({
-      reactGrab,
-    }) => {
+    test("should include HTML preview with tag and content", async ({ reactGrab }) => {
       await reactGrab.activate();
 
       await reactGrab.hoverElement("[data-testid='main-title']");
@@ -40,6 +38,32 @@ test.describe("Element Context Fallback", () => {
 
       const clipboard = await reactGrab.getClipboardContent();
       expect(clipboard).toContain("NestedCard");
+    });
+
+    test("should include parent components in stack, not just immediate component", async ({
+      reactGrab,
+    }) => {
+      await reactGrab.activate();
+
+      await reactGrab.hoverElement("[data-testid='nested-button']");
+      await reactGrab.waitForSelectionBox();
+      await reactGrab.clickElement("[data-testid='nested-button']");
+
+      const clipboard = await reactGrab.getClipboardContent();
+      const inMatches = clipboard.match(/in\s+\S+/g) ?? [];
+      expect(inMatches.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test("should include ancestor component for todo item", async ({ reactGrab }) => {
+      await reactGrab.activate();
+
+      const todoItem = "[data-testid='todo-list'] ul li:first-child span";
+      await reactGrab.hoverElement(todoItem);
+      await reactGrab.waitForSelectionBox();
+      await reactGrab.clickElement(todoItem);
+
+      const clipboard = await reactGrab.getClipboardContent();
+      expect(clipboard).toContain("TodoItem");
     });
   });
 
@@ -66,14 +90,9 @@ test.describe("Element Context Fallback", () => {
       expect(clipboard).toContain("Plain DOM content");
     });
 
-    test("should include priority attrs for SVG elements", async ({
-      reactGrab,
-    }) => {
+    test("should include priority attrs for SVG elements", async ({ reactGrab }) => {
       await reactGrab.page.evaluate(() => {
-        const svgElement = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "svg",
-        );
+        const svgElement = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         svgElement.id = "test-svg-icon";
         svgElement.setAttribute("class", "icon-class");
         svgElement.setAttribute("aria-label", "Close the modal dialog");
@@ -97,9 +116,7 @@ test.describe("Element Context Fallback", () => {
       expect(clipboard).not.toContain("viewBox");
     });
 
-    test("should truncate long outerHTML to max length", async ({
-      reactGrab,
-    }) => {
+    test("should truncate long outerHTML to max length", async ({ reactGrab }) => {
       await reactGrab.page.evaluate(() => {
         const longElement = document.createElement("div");
         longElement.id = "long-dom-element";

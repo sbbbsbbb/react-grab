@@ -1,6 +1,6 @@
 {
   "name": "react-grab",
-  "version": "0.1.15",
+  "version": "0.1.29",
   "description": "Select context for coding agents directly from your website",
   "keywords": [
     "agent",
@@ -22,7 +22,11 @@
     "type": "git",
     "url": "git+https://github.com/aidenybai/react-grab.git"
   },
+  "bin": {
+    "react-grab": "./bin/cli.js"
+  },
   "files": [
+    "bin",
     "dist",
     "package.json",
     "README.md",
@@ -55,14 +59,14 @@
         "default": "./dist/core/index.cjs"
       }
     },
-    "./react": {
+    "./primitives": {
       "import": {
-        "types": "./dist/react.d.ts",
-        "default": "./dist/react.js"
+        "types": "./dist/primitives.d.ts",
+        "default": "./dist/primitives.js"
       },
       "require": {
-        "types": "./dist/react.d.cts",
-        "default": "./dist/react.cjs"
+        "types": "./dist/primitives.d.cts",
+        "default": "./dist/primitives.cjs"
       }
     },
     "./src/*": "./src/*",
@@ -70,30 +74,30 @@
     "./dist/styles.css": "./dist/styles.css",
     "./dist/*": "./dist/*.js",
     "./dist/*.js": "./dist/*.js",
-    "./dist/*.cjs": "./dist/*.cjs",
-    "./dist/*.mjs": "./dist/*.mjs"
+    "./dist/*.cjs": "./dist/*.cjs"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "css:build": "tailwindcss -i ./src/styles.css -o ./dist/styles.css -m && node scripts/css-rem-to-px.mjs",
     "css:watch": "tailwindcss -i ./src/styles.css -o ./dist/styles.css -w",
-    "prebuild": "mkdir -p dist && tailwindcss -i ./src/styles.css -o ./dist/styles.css -m && node scripts/css-rem-to-px.mjs",
-    "build": "NODE_ENV=production tsup",
-    "dev": "concurrently \"pnpm:css:watch\" \"tsup --watch --ignore-watch dist\"",
-    "lint": "oxlint",
-    "lint:fix": "oxlint --fix",
-    "format": "prettier --write .",
+    "prebuild": "mkdir -p dist && tailwindcss -i ./src/styles.css -o ./dist/styles.css -m && tsx scripts/css-rem-to-px.ts",
+    "build": "NODE_ENV=production vp pack && cp dist/index.iife.js dist/index.global.js && tsx scripts/build-registry.ts",
+    "dev": "concurrently \"pnpm:css:watch\" \"vp pack --watch\"",
+    "lint": "vp lint",
+    "lint:fix": "vp lint --fix",
+    "format": "vp fmt",
+    "format:check": "vp fmt --check",
+    "check": "vp check",
     "test": "playwright test",
+    "test:expect": "bun e2e/react-grab.expect.ts",
     "typecheck": "tsc --noEmit",
-    "publint": "publint",
     "prepublishOnly": "pnpm build",
-    "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
-    "bippy": "^0.5.30",
+    "@react-grab/cli": "workspace:*",
+    "bippy": "^0.5.37",
     "solid-js": "^1.9.10"
   },
   "devDependencies": {
@@ -101,17 +105,14 @@
     "@babel/preset-typescript": "^7.28.5",
     "@playwright/test": "^1.40.0",
     "@tailwindcss/cli": "^4.1.17",
+    "@types/babel__core": "^7.20.5",
     "@types/node": "^20.19.23",
     "@types/react": "^19.2.11",
     "babel-preset-solid": "^1.9.10",
-    "clsx": "^2.1.1",
     "concurrently": "^9.1.2",
-    "esbuild-plugin-babel": "^0.2.3",
-    "oxlint": "^1.42.0",
-    "publint": "^0.2.12",
-    "tailwind-merge": "^2.5.5",
+    "expect-sdk": "link:/Users/aidenybai/Developer/expect/packages/typescript-sdk",
     "tailwindcss": "^4.1.0",
-    "tsup": "^8.2.4"
+    "tsx": "^4.21.0"
   },
   "peerDependencies": {
     "react": ">=17.0.0"

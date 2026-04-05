@@ -1,3 +1,9 @@
+// Translation is stripped from CSS transform matrices while rotation, scale, and
+// skew are preserved. The overlay already accounts for translation via CSS
+// left/top (derived from getBoundingClientRect), so including it in the transform
+// would double-apply it. For example, transform: translate(50px, 0) rotate(10deg)
+// becomes just rotate(10deg). In 3D matrices translation lives in column-major
+// indices 12-14.
 const isValidNumber = (value: number): boolean =>
   typeof value === "number" && !Number.isNaN(value) && Number.isFinite(value);
 
@@ -9,10 +15,7 @@ const parseMatrixValue = (value: string): number | null => {
   return isValidNumber(parsedValue) ? parsedValue : null;
 };
 
-const parseMatrixValues = (
-  valuesString: string,
-  expectedLength: number,
-): number[] | null => {
+const parseMatrixValues = (valuesString: string, expectedLength: number): number[] | null => {
   const rawValues = valuesString.split(",");
 
   if (rawValues.length !== expectedLength) {
@@ -31,12 +34,8 @@ const parseMatrixValues = (
   return parsedValues;
 };
 
-const isIdentityMatrix2d = (
-  a: number,
-  b: number,
-  c: number,
-  d: number,
-): boolean => a === 1 && b === 0 && c === 0 && d === 1;
+const isIdentityMatrix2d = (a: number, b: number, c: number, d: number): boolean =>
+  a === 1 && b === 0 && c === 0 && d === 1;
 
 const isIdentityMatrix3d = (values: number[]): boolean =>
   values[0] === 1 &&
@@ -53,13 +52,11 @@ const isIdentityMatrix3d = (values: number[]): boolean =>
   values[11] === 0 &&
   values[15] === 1;
 
-export const stripTranslateFromTransformString = (
-  transform: string,
-): string => {
+export const stripTranslateFromTransformString = (transform: string): string => {
   if (!transform || transform === "none") return "none";
 
-  if (transform.charCodeAt(0) === 109) {
-    if (transform.charCodeAt(6) === 51) {
+  if (transform.startsWith("matrix")) {
+    if (transform.startsWith("matrix3d(")) {
       const start = 9;
       const end = transform.length - 1;
       const values = parseMatrixValues(transform.slice(start, end), 16);
@@ -78,13 +75,13 @@ export const stripTranslateFromTransformString = (
       const values = parseMatrixValues(transform.slice(start, end), 6);
 
       if (values) {
-        const a = values[0];
-        const b = values[1];
-        const c = values[2];
-        const d = values[3];
+        const scaleX = values[0];
+        const skewY = values[1];
+        const skewX = values[2];
+        const scaleY = values[3];
 
-        if (isIdentityMatrix2d(a, b, c, d)) return "none";
-        return `matrix(${a}, ${b}, ${c}, ${d}, 0, 0)`;
+        if (isIdentityMatrix2d(scaleX, skewY, skewX, scaleY)) return "none";
+        return `matrix(${scaleX}, ${skewY}, ${skewX}, ${scaleY}, 0, 0)`;
       }
     }
   }
@@ -96,8 +93,7 @@ export const stripTranslateFromMatrix = (matrix: DOMMatrix): string => {
   if (matrix.isIdentity) return "none";
 
   if (matrix.is2D) {
-    if (isIdentityMatrix2d(matrix.a, matrix.b, matrix.c, matrix.d))
-      return "none";
+    if (isIdentityMatrix2d(matrix.a, matrix.b, matrix.c, matrix.d)) return "none";
     return `matrix(${matrix.a}, ${matrix.b}, ${matrix.c}, ${matrix.d}, 0, 0)`;
   }
 

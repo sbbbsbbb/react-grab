@@ -1,12 +1,16 @@
 import { clearElementPositionCache } from "./get-element-at-position.js";
-import {
-  enablePointerEventsOverride,
-  disablePointerEventsOverride,
-} from "./pointer-events-override.js";
 import { createStyleElement } from "./create-style-element.js";
 
-const POINTER_EVENTS_STYLES = "* { pointer-events: none !important; }";
+// We apply pointer-events:none on `html` rather than `*` because pointer-events
+// is inherited, so toggling it on a single root element is O(1) style invalidation
+// instead of O(N) for every DOM node, which caused visible lag on dense DOMs
+// like GitHub diff viewers with 10k+ nodes.
+// @see https://github.com/aidenybai/react-grab/pull/209
+const POINTER_EVENTS_STYLES = "html { pointer-events: none !important; }";
 
+// These capture-phase blockers prevent hover and focus side effects while the
+// pointer-events freeze is briefly suspended for hit-testing. Even though the
+// stylesheet is disabled, these listeners swallow events the browser would fire.
 const MOUSE_EVENTS_TO_BLOCK = [
   "mouseenter",
   "mouseleave",
@@ -20,6 +24,9 @@ const MOUSE_EVENTS_TO_BLOCK = [
 
 const FOCUS_EVENTS_TO_BLOCK = ["focus", "blur", "focusin", "focusout"] as const;
 
+// Before disabling pointer-events we snapshot current :hover and :focus computed
+// values (background-color, box-shadow, opacity, etc.) onto inline styles so
+// elements keep their visual state (e.g. a hovered button stays highlighted).
 const HOVER_STYLE_PROPERTIES = [
   "background-color",
   "color",
@@ -49,84 +56,62 @@ const FOCUS_STYLE_PROPERTIES = [
   "ring-width",
 ] as const;
 
-const ANIMATION_CONTROLLED_PROPERTIES = [
-  "opacity",
-  "transform",
-  "scale",
-  "translate",
-  "rotate",
-] as const;
-
 interface FrozenPseudoState {
   element: HTMLElement;
-  originalCssText: string;
   frozenStyles: string;
+  originalPropertyValues: Map<string, string>;
 }
 
-const frozenHoverElements = new Map<HTMLElement, string>();
-const frozenFocusElements = new Map<HTMLElement, string>();
+const frozenHoverElements = new Map<HTMLElement, Map<string, string>>();
+const frozenFocusElements = new Map<HTMLElement, Map<string, string>>();
 let pointerEventsStyle: HTMLStyleElement | null = null;
 
 const stopEvent = (event: Event): void => {
-  event.stopPropagation();
   event.stopImmediatePropagation();
 };
 
 const preventFocusChange = (event: Event): void => {
   event.preventDefault();
-  event.stopPropagation();
   event.stopImmediatePropagation();
 };
 
-const hasAnimationControlledProperty = (cssText: string): boolean => {
-  const lowerCssText = cssText.toLowerCase();
-  return ANIMATION_CONTROLLED_PROPERTIES.some((prop) =>
-    lowerCssText.includes(prop),
-  );
-};
-
-const collectHoverStates = (): FrozenPseudoState[] => {
-  const elementsToFreeze: FrozenPseudoState[] = [];
-
-  for (const element of document.querySelectorAll(":hover")) {
-    if (!(element instanceof HTMLElement)) continue;
-
-    const originalCssText = element.style.cssText;
-    const computed = getComputedStyle(element);
-    let frozenStyles = originalCssText;
-
-    for (const prop of HOVER_STYLE_PROPERTIES) {
-      const computedValue = computed.getPropertyValue(prop);
-      if (computedValue) {
-        frozenStyles += `${prop}: ${computedValue} !important; `;
-      }
+const collectOriginalPropertyValues = (
+  element: HTMLElement,
+  properties: readonly string[],
+): Map<string, string> => {
+  const originalPropertyValues = new Map<string, string>();
+  for (const prop of properties) {
+    const inlineValue = element.style.getPropertyValue(prop);
+    if (inlineValue) {
+      originalPropertyValues.set(prop, inlineValue);
     }
-
-    elementsToFreeze.push({ element, originalCssText, frozenStyles });
   }
-
-  return elementsToFreeze;
+  return originalPropertyValues;
 };
 
-const collectFocusStates = (): FrozenPseudoState[] => {
+const collectPseudoStates = (
+  selector: string,
+  properties: readonly string[],
+  alreadyFrozen?: Map<HTMLElement, Map<string, string>>,
+): FrozenPseudoState[] => {
   const elementsToFreeze: FrozenPseudoState[] = [];
 
-  for (const element of document.querySelectorAll(":focus, :focus-visible")) {
+  for (const element of document.querySelectorAll(selector)) {
     if (!(element instanceof HTMLElement)) continue;
-    if (frozenFocusElements.has(element)) continue;
+    if (alreadyFrozen?.has(element)) continue;
 
-    const originalCssText = element.style.cssText;
     const computed = getComputedStyle(element);
-    let frozenStyles = originalCssText;
+    let frozenStyles = element.style.cssText;
+    const originalPropertyValues = collectOriginalPropertyValues(element, properties);
 
-    for (const prop of FOCUS_STYLE_PROPERTIES) {
+    for (const prop of properties) {
       const computedValue = computed.getPropertyValue(prop);
       if (computedValue) {
         frozenStyles += `${prop}: ${computedValue} !important; `;
       }
     }
 
-    elementsToFreeze.push({ element, originalCssText, frozenStyles });
+    elementsToFreeze.push({ element, frozenStyles, originalPropertyValues });
   }
 
   return elementsToFreeze;
@@ -134,32 +119,37 @@ const collectFocusStates = (): FrozenPseudoState[] => {
 
 const applyFrozenStates = (
   states: FrozenPseudoState[],
-  storageMap: Map<HTMLElement, string>,
+  storageMap: Map<HTMLElement, Map<string, string>>,
 ): void => {
-  for (const { element, originalCssText, frozenStyles } of states) {
-    storageMap.set(element, originalCssText);
+  for (const { element, frozenStyles, originalPropertyValues } of states) {
+    storageMap.set(element, originalPropertyValues);
     element.style.cssText = frozenStyles;
   }
 };
 
 const restoreFrozenStates = (
-  storageMap: Map<HTMLElement, string>,
+  storageMap: Map<HTMLElement, Map<string, string>>,
   styleProperties: readonly string[],
 ): void => {
-  for (const [element, originalCssText] of storageMap) {
-    // HACK: For elements with animation-controlled properties (opacity, transform, etc.),
-    // only remove the style properties we added, don't restore original cssText.
-    // Animation libraries (Framer Motion, etc.) use inline styles that change over time.
-    // Restoring old cssText would reset animation progress and cause visual flash.
-    if (hasAnimationControlledProperty(originalCssText)) {
-      for (const prop of styleProperties) {
+  for (const [element, originalPropertyValues] of storageMap) {
+    for (const prop of styleProperties) {
+      const originalValue = originalPropertyValues.get(prop);
+      if (originalValue) {
+        element.style.setProperty(prop, originalValue);
+      } else {
         element.style.removeProperty(prop);
       }
-    } else {
-      element.style.cssText = originalCssText;
     }
   }
   storageMap.clear();
+};
+
+export const suspendPointerEventsFreeze = (): void => {
+  if (pointerEventsStyle) pointerEventsStyle.disabled = true;
+};
+
+export const resumePointerEventsFreeze = (): void => {
+  if (pointerEventsStyle) pointerEventsStyle.disabled = false;
 };
 
 export const freezePseudoStates = (): void => {
@@ -173,21 +163,20 @@ export const freezePseudoStates = (): void => {
     document.addEventListener(eventType, preventFocusChange, true);
   }
 
-  const hoverStates = collectHoverStates();
-  const focusStates = collectFocusStates();
+  const hoverStates = collectPseudoStates(":hover", HOVER_STYLE_PROPERTIES);
+  const focusStates = collectPseudoStates(
+    ":focus, :focus-visible",
+    FOCUS_STYLE_PROPERTIES,
+    frozenFocusElements,
+  );
 
   applyFrozenStates(hoverStates, frozenHoverElements);
   applyFrozenStates(focusStates, frozenFocusElements);
 
-  pointerEventsStyle = createStyleElement(
-    "data-react-grab-frozen-pseudo",
-    POINTER_EVENTS_STYLES,
-  );
-  enablePointerEventsOverride();
+  pointerEventsStyle = createStyleElement("data-react-grab-frozen-pseudo", POINTER_EVENTS_STYLES);
 };
 
 export const unfreezePseudoStates = (): void => {
-  disablePointerEventsOverride();
   clearElementPositionCache();
 
   for (const eventType of MOUSE_EVENTS_TO_BLOCK) {

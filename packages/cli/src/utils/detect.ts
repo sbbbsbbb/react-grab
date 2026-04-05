@@ -1,40 +1,26 @@
-import { execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { detect } from "@antfu/ni";
 import ignore from "ignore";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 export type Framework = "next" | "vite" | "tanstack" | "webpack" | "unknown";
 export type NextRouterType = "app" | "pages" | "unknown";
-export type UnsupportedFramework =
-  | "remix"
-  | "astro"
-  | "sveltekit"
-  | "gatsby"
-  | null;
+export type UnsupportedFramework = "remix" | "astro" | "sveltekit" | "gatsby" | null;
 
-export interface ProjectInfo {
+interface ProjectInfo {
   packageManager: PackageManager;
   framework: Framework;
   nextRouterType: NextRouterType;
   isMonorepo: boolean;
   projectRoot: string;
   hasReactGrab: boolean;
-  installedAgents: string[];
   unsupportedFramework: UnsupportedFramework;
 }
 
-const VALID_PACKAGE_MANAGERS: ReadonlySet<string> = new Set([
-  "npm",
-  "yarn",
-  "pnpm",
-  "bun",
-]);
+const VALID_PACKAGE_MANAGERS: ReadonlySet<string> = new Set(["npm", "yarn", "pnpm", "bun"]);
 
-export const detectPackageManager = async (
-  projectRoot: string,
-): Promise<PackageManager> => {
+const detectPackageManager = async (projectRoot: string): Promise<PackageManager> => {
   const detected = await detect({ cwd: projectRoot });
   if (detected) {
     // @antfu/ni returns versioned agents like "pnpm@6" or "yarn@berry"
@@ -127,7 +113,6 @@ export interface WorkspaceProject {
   name: string;
   path: string;
   framework: Framework;
-  hasReact: boolean;
 }
 
 const getWorkspacePatterns = (projectRoot: string): string[] => {
@@ -182,10 +167,7 @@ const getWorkspacePatterns = (projectRoot: string): string[] => {
   return [...new Set(patterns)];
 };
 
-const expandWorkspacePattern = (
-  projectRoot: string,
-  pattern: string,
-): string[] => {
+const expandWorkspacePattern = (projectRoot: string, pattern: string): string[] => {
   const isGlob = pattern.endsWith("/*");
   const cleanPattern = pattern.replace(/\/\*$/, "");
   const basePath = join(projectRoot, cleanPattern);
@@ -229,12 +211,9 @@ const hasReactDependency = (projectPath: string): boolean => {
   }
 };
 
-const buildReactProject = (
-  projectPath: string,
-): WorkspaceProject | null => {
+const buildReactProject = (projectPath: string): WorkspaceProject | null => {
   const framework = detectFramework(projectPath);
-  const hasReact = hasReactDependency(projectPath);
-  if (!hasReact && framework === "unknown") return null;
+  if (!hasReactDependency(projectPath) && framework === "unknown") return null;
 
   let name = basename(projectPath);
   const packageJsonPath = join(projectPath, "package.json");
@@ -243,12 +222,10 @@ const buildReactProject = (
     name = packageJson.name || name;
   } catch {}
 
-  return { name, path: projectPath, framework, hasReact };
+  return { name, path: projectPath, framework };
 };
 
-const findWorkspaceProjects = (
-  projectRoot: string,
-): WorkspaceProject[] => {
+const findWorkspaceProjects = (projectRoot: string): WorkspaceProject[] => {
   const patterns = getWorkspacePatterns(projectRoot);
   const projects: WorkspaceProject[] = [];
 
@@ -313,14 +290,7 @@ const scanDirectoryForProjects = (
         }
       }
 
-      projects.push(
-        ...scanDirectoryForProjects(
-          entryPath,
-          ignorer,
-          maxDepth,
-          currentDepth + 1,
-        ),
-      );
+      projects.push(...scanDirectoryForProjects(entryPath, ignorer, maxDepth, currentDepth + 1));
     }
   } catch {
     return projects;
@@ -333,10 +303,28 @@ const MAX_SCAN_DEPTH = 2;
 
 export const findReactProjects = (projectRoot: string): WorkspaceProject[] => {
   if (detectMonorepo(projectRoot)) {
-    return findWorkspaceProjects(projectRoot);
+    const workspaceProjects = findWorkspaceProjects(projectRoot);
+    if (workspaceProjects.length > 0) {
+      return workspaceProjects;
+    }
   }
+
   const ignorer = loadGitignore(projectRoot);
-  return scanDirectoryForProjects(projectRoot, ignorer, MAX_SCAN_DEPTH);
+  const scannedProjects = scanDirectoryForProjects(projectRoot, ignorer, MAX_SCAN_DEPTH);
+  if (scannedProjects.length > 0) {
+    return scannedProjects;
+  }
+
+  let currentDirectory = dirname(projectRoot);
+  while (currentDirectory !== dirname(currentDirectory)) {
+    const parentProject = buildReactProject(currentDirectory);
+    if (parentProject) {
+      return [parentProject];
+    }
+    currentDirectory = dirname(currentDirectory);
+  }
+
+  return [];
 };
 
 const hasReactGrabInFile = (filePath: string): boolean => {
@@ -400,20 +388,7 @@ export const detectReactGrab = (projectRoot: string): boolean => {
   return filesToCheck.some(hasReactGrabInFile);
 };
 
-const AGENT_PACKAGES = [
-  "@react-grab/claude-code",
-  "@react-grab/cursor",
-  "@react-grab/opencode",
-  "@react-grab/codex",
-  "@react-grab/gemini",
-  "@react-grab/amp",
-  "@react-grab/ami",
-  "@react-grab/mcp",
-];
-
-export const detectUnsupportedFramework = (
-  projectRoot: string,
-): UnsupportedFramework => {
+export const detectUnsupportedFramework = (projectRoot: string): UnsupportedFramework => {
   const packageJsonPath = join(projectRoot, "package.json");
 
   if (!existsSync(packageJsonPath)) {
@@ -449,73 +424,17 @@ export const detectUnsupportedFramework = (
   }
 };
 
-export const detectInstalledAgents = (projectRoot: string): string[] => {
-  const packageJsonPath = join(projectRoot, "package.json");
-
-  if (!existsSync(packageJsonPath)) {
-    return [];
-  }
-
-  try {
-    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
-    const allDependencies = {
-      ...packageJson.dependencies,
-      ...packageJson.devDependencies,
-    };
-
-    return AGENT_PACKAGES.filter((agent) =>
-      Boolean(allDependencies[agent]),
-    ).map((agent) => agent.replace("@react-grab/", ""));
-  } catch {
-    return [];
-  }
-};
-
-export type AgentCLI =
-  | "claude"
-  | "cursor-agent"
-  | "opencode"
-  | "codex"
-  | "gemini"
-  | "amp";
-
-const AGENT_CLI_COMMANDS: AgentCLI[] = [
-  "claude",
-  "cursor-agent",
-  "opencode",
-  "codex",
-  "gemini",
-  "amp",
-];
-
-const isCommandAvailable = (command: string): boolean => {
-  try {
-    execSync(`which ${command}`, { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-export const detectAvailableAgentCLIs = (): AgentCLI[] => {
-  return AGENT_CLI_COMMANDS.filter(isCommandAvailable);
-};
-
-export const detectProject = async (
-  projectRoot: string = process.cwd(),
-): Promise<ProjectInfo> => {
+export const detectProject = async (projectRoot: string = process.cwd()): Promise<ProjectInfo> => {
   const framework = detectFramework(projectRoot);
   const packageManager = await detectPackageManager(projectRoot);
 
   return {
     packageManager,
     framework,
-    nextRouterType:
-      framework === "next" ? detectNextRouterType(projectRoot) : "unknown",
+    nextRouterType: framework === "next" ? detectNextRouterType(projectRoot) : "unknown",
     isMonorepo: detectMonorepo(projectRoot),
     projectRoot,
     hasReactGrab: detectReactGrab(projectRoot),
-    installedAgents: detectInstalledAgents(projectRoot),
     unsupportedFramework: detectUnsupportedFramework(projectRoot),
   };
 };

@@ -14,7 +14,7 @@ jobs:
       - run: corepack enable
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: "pnpm"
 
       - name: Install dependencies
@@ -28,13 +28,4 @@ jobs:
             ./packages/react-grab \
             ./packages/cli \
             ./packages/grab \
-            ./packages/relay \
-            ./packages/utils \
-            ./packages/provider-ami \
-            ./packages/provider-amp \
-            ./packages/provider-claude-code \
-            ./packages/provider-codex \
-            ./packages/provider-cursor \
-            ./packages/provider-droid \
-            ./packages/provider-gemini \
-            ./packages/provider-opencode
+            ./packages/mcp

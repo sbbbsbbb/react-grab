@@ -1,6 +1,5 @@
 # <img src="https://github.com/aidenybai/react-grab/blob/main/.github/public/logo.png?raw=true" width="60" align="center" /> Grab
 
-[![size](https://img.shields.io/bundlephobia/minzip/grab?label=gzip&style=flat&colorA=000000&colorB=000000)](https://bundlephobia.com/package/grab)
 [![version](https://img.shields.io/npm/v/grab?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/grab)
 [![downloads](https://img.shields.io/npm/dt/grab.svg?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/grab)
 
@@ -12,40 +11,20 @@ It makes tools like Cursor, Claude Code, Copilot run up to [**3× faster**](http
 
 ### [Try out a demo! →](https://react-grab.com)
 
-![React Grab Demo](https://github.com/aidenybai/react-grab/blob/main/packages/website/public/demo.gif?raw=true)
+![React Grab Demo](https://github.com/aidenybai/react-grab/blob/main/apps/website/public/demo.gif?raw=true)
 
 ## Install
 
 Run this command at your project root (where `next.config.ts` or `vite.config.ts` is located):
 
 ```bash
-npx -y grab@latest init
+npx grab@latest init
 ```
 
-Use the `-y` flag to skip interactive prompts:
+## Connect to MCP
 
 ```bash
-npx -y grab@latest init -y
-```
-
-## Connect to Your Agent
-
-Connect React Grab directly to your coding agent (Cursor, Claude Code, Codex, Gemini, Amp, and more):
-
-```bash
-npx -y grab@latest add [agent]
-```
-
-Or connect via MCP:
-
-```bash
-npx -y grab@latest add mcp
-```
-
-Disconnect an agent:
-
-```bash
-npx -y grab@latest remove [agent]
+npx grab@latest add mcp
 ```
 
 ## Usage
@@ -123,23 +102,12 @@ export default function Document() {
 
 #### Vite
 
-Add this to your `index.html`:
+Add this at the top of your main entry file (e.g., `src/main.tsx`):
 
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <script type="module">
-      if (import.meta.env.DEV) {
-        import("grab");
-      }
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+```tsx
+if (import.meta.env.DEV) {
+  import("grab");
+}
 ```
 
 #### Webpack
@@ -158,28 +126,71 @@ if (process.env.NODE_ENV === "development") {
 }
 ```
 
-## Extending React Grab
+## Plugins
 
-React Grab exposes the `__REACT_GRAB__` API for extending functionality with plugins, hooks, actions, themes, and custom agents.
+Use plugins to extend React Grab's built-in UI with context menu actions, toolbar menu items, lifecycle hooks, and theme overrides. Plugins run within React Grab.
 
-See [`packages/react-grab/src/types.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/types.ts) and [`packages/react-grab/src/core/plugin-registry.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/core/plugin-registry.ts) for reference.
+Register a plugin using the `registerPlugin` and `unregisterPlugin` exports:
 
-Or copy this into an agent to generate a plugin:
+```js
+import { registerPlugin } from "grab";
 
-```md
-Clone https://github.com/aidenybai/react-grab into /tmp
-
-Check these files for reference:
-
-- packages/react-grab/src/types.ts (Plugin and PluginHooks interfaces)
-- packages/react-grab/src/core/plugin-registry.ts (implementation)
-
-Plugins are registered via `__REACT_GRAB__.registerPlugin({ name, hooks, actions, theme })`.
-
-Add the code in client-side code (e.g., "use client" in Next.js) inside a useEffect after React Grab loads.
-
-Generate an example plugin that logs when an element is selected.
+registerPlugin({
+  name: "my-plugin",
+  hooks: {
+    onElementSelect: (element) => {
+      console.log("Selected:", element.tagName);
+    },
+  },
+});
 ```
+
+In React, register inside a `useEffect`:
+
+```jsx
+import { registerPlugin, unregisterPlugin } from "grab";
+
+useEffect(() => {
+  registerPlugin({
+    name: "my-plugin",
+    actions: [
+      {
+        id: "my-action",
+        label: "My Action",
+        shortcut: "M",
+        onAction: (context) => {
+          console.log("Action on:", context.element);
+          context.hideContextMenu();
+        },
+      },
+    ],
+  });
+
+  return () => unregisterPlugin("my-plugin");
+}, []);
+```
+
+Actions use a `target` field to control where they appear. Omit `target` (or set `"context-menu"`) for the right-click menu, or set `"toolbar"` for the toolbar dropdown:
+
+```js
+actions: [
+  {
+    id: "inspect",
+    label: "Inspect",
+    shortcut: "I",
+    onAction: (ctx) => console.dir(ctx.element),
+  },
+  {
+    id: "toggle-freeze",
+    label: "Freeze",
+    target: "toolbar",
+    isActive: () => isFrozen,
+    onAction: () => toggleFreeze(),
+  },
+];
+```
+
+See [`packages/react-grab/src/types.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/types.ts) for the full `Plugin`, `PluginHooks`, and `PluginConfig` interfaces.
 
 ## Resources & Contributing Back
 

@@ -1,6 +1,6 @@
 {
   "name": "grab",
-  "version": "0.1.15",
+  "version": "0.1.29",
   "description": "Select context for coding agents directly from your website",
   "keywords": [
     "agent",
@@ -61,8 +61,7 @@
     },
     "./dist/*": "./dist/*.js",
     "./dist/*.js": "./dist/*.js",
-    "./dist/*.cjs": "./dist/*.cjs",
-    "./dist/*.mjs": "./dist/*.mjs"
+    "./dist/*.cjs": "./dist/*.cjs"
   },
   "publishConfig": {
     "access": "public"

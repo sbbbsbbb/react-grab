@@ -1,7 +1,7 @@
-import { vi, describe, expect, it, beforeEach } from "vitest";
+import { vi, describe, expect, it, beforeEach } from "vite-plus/test";
 import {
   previewOptionsTransform,
-  applyOptionsTransform,
+  applyTransform,
   type ReactGrabOptions,
 } from "../src/utils/transform.js";
 
@@ -45,9 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }`;
 
   it("should add activationKey option to existing React Grab script", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithReactGrab);
 
     const options: ReactGrabOptions = {
@@ -63,9 +61,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   });
 
   it("should preserve valid JSX format when adding data-options to self-closing Script", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithReactGrab);
 
     const options: ReactGrabOptions = {
@@ -97,9 +93,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   );
 }`;
 
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithSelfClosingScript);
 
     const options: ReactGrabOptions = {
@@ -117,9 +111,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     expect(result.newContent).toContain("maxContextLines: 3");
     expect(result.newContent).toContain("/>");
     expect(result.newContent).not.toMatch(/\}\)\s*\n\s*\n\s*\/>/);
-    expect(result.newContent).not.toMatch(
-      /strategy="beforeInteractive"\s*\/\s*\n/,
-    );
+    expect(result.newContent).not.toMatch(/strategy="beforeInteractive"\s*\/\s*\n/);
   });
 
   it("should not add extra blank line before closing tag", () => {
@@ -142,9 +134,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   );
 }`;
 
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithScript);
 
     const options: ReactGrabOptions = {
@@ -159,9 +149,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   });
 
   it("should add multiple options to React Grab script", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithReactGrab);
 
     const options: ReactGrabOptions = {
@@ -182,9 +170,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   });
 
   it("should add allowActivationInsideInput option", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithReactGrab);
 
     const options: ReactGrabOptions = {
@@ -199,9 +185,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   });
 
   it("should add maxContextLines option", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithReactGrab);
 
     const options: ReactGrabOptions = {
@@ -236,9 +220,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   );
 }`;
 
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithOptions);
 
     const options: ReactGrabOptions = {
@@ -261,9 +243,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   );
 }`;
 
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithoutReactGrab);
 
     const options: ReactGrabOptions = {
@@ -313,9 +293,7 @@ export default function Document() {
 }`;
 
   it("should add options to Pages Router document", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("_document.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("_document.tsx"));
     mockReadFileSync.mockReturnValue(documentWithReactGrab);
 
     const options: ReactGrabOptions = {
@@ -333,26 +311,16 @@ export default function Document() {
 });
 
 describe("previewOptionsTransform - Vite", () => {
-  const indexWithReactGrab = `<!doctype html>
-<html lang="en">
-  <head>
-    <script type="module">
-      if (import.meta.env.DEV) {
-        import("react-grab");
-      }
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>`;
+  const entryWithReactGrab = `if (import.meta.env.DEV) {
+  import("react-grab");
+}
+
+import React from "react";
+import ReactDOM from "react-dom/client";`;
 
   it("should add options to Vite import", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("index.html"),
-    );
-    mockReadFileSync.mockReturnValue(indexWithReactGrab);
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("main.tsx"));
+    mockReadFileSync.mockReturnValue(entryWithReactGrab);
 
     const options: ReactGrabOptions = {
       activationKey: "Space",
@@ -366,24 +334,15 @@ describe("previewOptionsTransform - Vite", () => {
   });
 
   it("should update existing options in Vite import without duplicating", () => {
-    const indexWithExistingOptions = `<!doctype html>
-<html lang="en">
-  <head>
-    <script type="module">
-      if (import.meta.env.DEV) {
-        import("react-grab").then((m) => m.init({"activationKey":"g"}));
-      }
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>`;
+    const entryWithExistingOptions = `if (import.meta.env.DEV) {
+  import("react-grab").then((m) => m.init({"activationKey":"g"}));
+}
 
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("index.html"),
-    );
-    mockReadFileSync.mockReturnValue(indexWithExistingOptions);
+import React from "react";
+import ReactDOM from "react-dom/client";`;
+
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("main.tsx"));
+    mockReadFileSync.mockReturnValue(entryWithExistingOptions);
 
     const options: ReactGrabOptions = {
       activationKey: "Meta+K",
@@ -399,10 +358,8 @@ describe("previewOptionsTransform - Vite", () => {
   });
 
   it("should add multiple options to Vite import", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("index.html"),
-    );
-    mockReadFileSync.mockReturnValue(indexWithReactGrab);
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("main.tsx"));
+    mockReadFileSync.mockReturnValue(entryWithReactGrab);
 
     const options: ReactGrabOptions = {
       activationKey: "Alt+E",
@@ -420,18 +377,11 @@ describe("previewOptionsTransform - Vite", () => {
   });
 
   it("should fail when React Grab import not found", () => {
-    const indexWithoutReactGrab = `<!doctype html>
-<html lang="en">
-  <head></head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>`;
+    const entryWithoutReactGrab = `import React from "react";
+import ReactDOM from "react-dom/client";`;
 
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("index.html"),
-    );
-    mockReadFileSync.mockReturnValue(indexWithoutReactGrab);
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("main.tsx"));
+    mockReadFileSync.mockReturnValue(entryWithoutReactGrab);
 
     const options: ReactGrabOptions = {
       activationKey: "Space",
@@ -459,21 +409,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );`;
 
   it("should add options to Webpack import", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("index.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("index.tsx"));
     mockReadFileSync.mockReturnValue(entryWithReactGrab);
 
     const options: ReactGrabOptions = {
       activationKey: "Ctrl+K",
     };
 
-    const result = previewOptionsTransform(
-      "/test",
-      "webpack",
-      "unknown",
-      options,
-    );
+    const result = previewOptionsTransform("/test", "webpack", "unknown", options);
 
     expect(result.success).toBe(true);
     expect(result.newContent).toContain(".then((m) => m.init(");
@@ -488,21 +431,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 import React from "react";
 import ReactDOM from "react-dom/client";`;
 
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("index.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("index.tsx"));
     mockReadFileSync.mockReturnValue(entryWithExistingOptions);
 
     const options: ReactGrabOptions = {
       activationKey: "Space",
     };
 
-    const result = previewOptionsTransform(
-      "/test",
-      "webpack",
-      "unknown",
-      options,
-    );
+    const result = previewOptionsTransform("/test", "webpack", "unknown", options);
 
     expect(result.success).toBe(true);
     expect(result.newContent).toContain('"activationKey":"Space"');
@@ -512,9 +448,7 @@ import ReactDOM from "react-dom/client";`;
   });
 
   it("should handle all configuration options", () => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("index.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("index.tsx"));
     mockReadFileSync.mockReturnValue(entryWithReactGrab);
 
     const options: ReactGrabOptions = {
@@ -525,12 +459,7 @@ import ReactDOM from "react-dom/client";`;
       maxContextLines: 7,
     };
 
-    const result = previewOptionsTransform(
-      "/test",
-      "webpack",
-      "unknown",
-      options,
-    );
+    const result = previewOptionsTransform("/test", "webpack", "unknown", options);
 
     expect(result.success).toBe(true);
     expect(result.newContent).toContain('"activationKey":"Meta+Shift+D"');
@@ -549,19 +478,14 @@ describe("previewOptionsTransform - Unknown framework", () => {
       activationKey: "Meta+K",
     };
 
-    const result = previewOptionsTransform(
-      "/test",
-      "unknown",
-      "unknown",
-      options,
-    );
+    const result = previewOptionsTransform("/test", "unknown", "unknown", options);
 
     expect(result.success).toBe(false);
     expect(result.message).toContain("Could not find file");
   });
 });
 
-describe("applyOptionsTransform", () => {
+describe("applyTransform", () => {
   it("should write file when result has newContent and file is writable", () => {
     mockAccessSync.mockReturnValue(undefined);
     mockWriteFileSync.mockReturnValue(undefined);
@@ -574,13 +498,10 @@ describe("applyOptionsTransform", () => {
       newContent: "new content with options",
     };
 
-    const writeResult = applyOptionsTransform(result);
+    const writeResult = applyTransform(result);
 
     expect(writeResult.success).toBe(true);
-    expect(mockWriteFileSync).toHaveBeenCalledWith(
-      "/test/layout.tsx",
-      "new content with options",
-    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith("/test/layout.tsx", "new content with options");
   });
 
   it("should return error when file is not writable", () => {
@@ -596,7 +517,7 @@ describe("applyOptionsTransform", () => {
       newContent: "new content",
     };
 
-    const writeResult = applyOptionsTransform(result);
+    const writeResult = applyTransform(result);
 
     expect(writeResult.success).toBe(false);
     expect(writeResult.error).toContain("Cannot write to");
@@ -611,7 +532,7 @@ describe("applyOptionsTransform", () => {
       noChanges: true,
     };
 
-    const writeResult = applyOptionsTransform(result);
+    const writeResult = applyTransform(result);
 
     expect(writeResult.success).toBe(true);
     expect(mockWriteFileSync).not.toHaveBeenCalled();
@@ -624,7 +545,7 @@ describe("applyOptionsTransform", () => {
       message: "Error",
     };
 
-    const writeResult = applyOptionsTransform(result);
+    const writeResult = applyTransform(result);
 
     expect(writeResult.success).toBe(true);
     expect(mockWriteFileSync).not.toHaveBeenCalled();
@@ -650,9 +571,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }`;
 
   beforeEach(() => {
-    mockExistsSync.mockImplementation((path) =>
-      String(path).endsWith("layout.tsx"),
-    );
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("layout.tsx"));
     mockReadFileSync.mockReturnValue(layoutWithReactGrab);
   });
 

@@ -1,31 +1,27 @@
 import type { Component, JSX } from "solid-js";
 import { cn } from "../../utils/cn.js";
-import { PANEL_STYLES } from "../../constants.js";
-import { IconSelect } from "../icons/icon-select.jsx";
-import { IconComment } from "../icons/icon-comment.jsx";
 import { IconChevron } from "../icons/icon-chevron.jsx";
-import { getToolbarIconColor } from "../../utils/get-toolbar-icon-color.js";
-import {
-  getExpandGridClass,
-  getButtonSpacingClass,
-  getMinDimensionClass,
-} from "../../utils/toolbar-layout.js";
+import { getExpandGridClass, getMinDimensionClass } from "../../utils/toolbar-layout.js";
 
-export interface ToolbarContentProps {
+interface ToolbarContentProps {
   isActive?: boolean;
-  isCommentMode?: boolean;
   enabled?: boolean;
   isCollapsed?: boolean;
   snapEdge?: "top" | "bottom" | "left" | "right";
   isShaking?: boolean;
+  isCommentsExpanded?: boolean;
+  isCopyAllExpanded?: boolean;
+  isCommentsPinned?: boolean;
+  disableGridTransitions?: boolean;
   onAnimationEnd?: () => void;
   onPanelClick?: (event: MouseEvent) => void;
+  onCollapseClick?: (event: MouseEvent) => void;
+  onExpandableButtonsRef?: (element: HTMLDivElement) => void;
   selectButton?: JSX.Element;
-  commentButton?: JSX.Element;
-  historyButton?: JSX.Element;
+  commentsButton?: JSX.Element;
+  copyAllButton?: JSX.Element;
   toggleButton?: JSX.Element;
   collapseButton?: JSX.Element;
-  shakeTooltip?: JSX.Element;
   transformOrigin?: string;
 }
 
@@ -33,12 +29,25 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
   const edge = () => props.snapEdge ?? "bottom";
   const isVertical = () => edge() === "left" || edge() === "right";
 
-  const expandGridClass = (
-    isExpanded: boolean,
-    collapsedExtra?: string,
-  ): string => getExpandGridClass(isVertical(), isExpanded, collapsedExtra);
+  const expandGridClass = (isExpanded: boolean, collapsedExtra?: string): string =>
+    getExpandGridClass(isVertical(), isExpanded, collapsedExtra);
 
-  const buttonSpacingClass = () => getButtonSpacingClass(isVertical());
+  const gridTransitionClass = (): string => {
+    if (props.disableGridTransitions) return "";
+    if (isVertical()) {
+      return "transition-[grid-template-rows,opacity] duration-150 ease-out";
+    }
+    return "transition-[grid-template-columns,opacity] duration-150 ease-out";
+  };
+
+  const gridSizeTransitionClass = (): string => {
+    if (props.disableGridTransitions) return "";
+    if (isVertical()) {
+      return "transition-[grid-template-rows] duration-150 ease-out";
+    }
+    return "transition-[grid-template-columns] duration-150 ease-out";
+  };
+
   const minDimensionClass = () => getMinDimensionClass(isVertical());
 
   const collapsedEdgeClasses = () => {
@@ -69,79 +78,17 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
     }
   };
 
-  const defaultSelectButton = () => (
-    <button
-      class={cn(
-        "contain-layout flex items-center justify-center cursor-pointer interactive-scale touch-hitbox",
-        buttonSpacingClass(),
-      )}
-    >
-      <IconSelect
-        size={14}
-        class={cn(
-          "transition-colors",
-          getToolbarIconColor(
-            Boolean(props.isActive) && !props.isCommentMode,
-            Boolean(props.isCommentMode),
-          ),
-        )}
-      />
-    </button>
-  );
-
-  const defaultCommentButton = () => (
-    <button
-      class={cn(
-        "contain-layout flex items-center justify-center cursor-pointer interactive-scale touch-hitbox",
-        buttonSpacingClass(),
-      )}
-    >
-      <IconComment
-        size={14}
-        class={cn(
-          "transition-colors",
-          getToolbarIconColor(
-            Boolean(props.isCommentMode),
-            Boolean(props.isActive) && !props.isCommentMode,
-          ),
-        )}
-      />
-    </button>
-  );
-
-  const defaultToggleButton = () => (
-    <button
-      class={cn(
-        "contain-layout flex items-center justify-center cursor-pointer interactive-scale outline-none",
-        isVertical() ? "my-0.5" : "mx-0.5",
-      )}
-    >
-      <div
-        class={cn(
-          "relative rounded-full transition-colors",
-          isVertical() ? "w-3.5 h-2.5" : "w-5 h-3",
-          props.enabled ? "bg-black" : "bg-black/25",
-        )}
-      >
-        <div
-          class={cn(
-            "absolute top-0.5 rounded-full bg-white transition-transform",
-            isVertical() ? "w-1.5 h-1.5" : "w-2 h-2",
-            !props.enabled && "left-0.5",
-            props.enabled && (isVertical() ? "left-1.5" : "left-2.5"),
-          )}
-        />
-      </div>
-    </button>
-  );
-
   const defaultCollapseButton = () => (
-    <button class="contain-layout shrink-0 flex items-center justify-center cursor-pointer interactive-scale">
+    <button
+      data-react-grab-ignore-events
+      data-react-grab-toolbar-collapse
+      aria-label={props.isCollapsed ? "Expand toolbar" : "Collapse toolbar"}
+      class="contain-layout shrink-0 flex items-center justify-center cursor-pointer interactive-scale"
+      onClick={props.onCollapseClick}
+    >
       <IconChevron
-        class={cn(
-          "text-[#B3B3B3] transition-transform duration-150",
-          chevronRotation(),
-        )}
+        size={14}
+        class={cn("text-[#B3B3B3] transition-transform duration-150", chevronRotation())}
       />
     </button>
   );
@@ -149,11 +96,10 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
   return (
     <div
       class={cn(
-        "flex items-center justify-center rounded-[10px] antialiased transition-all duration-150 ease-out relative overflow-visible [font-synthesis:none] filter-[drop-shadow(0px_1px_2px_#51515140)] [corner-shape:superellipse(1.25)]",
+        "flex items-center justify-center rounded-[10px] antialiased relative overflow-visible [font-synthesis:none] filter-[drop-shadow(0px_1px_2px_#51515140)] [corner-shape:superellipse(1.25)]",
         isVertical() && "flex-col",
-        PANEL_STYLES,
-        !props.isCollapsed &&
-          (isVertical() ? "px-1.5 gap-1.5 py-2" : "py-1.5 gap-1.5 px-2"),
+        "bg-white",
+        !props.isCollapsed && (isVertical() ? "px-1.5 gap-1.5 py-2" : "py-1.5 gap-1.5 px-2"),
         collapsedEdgeClasses(),
         props.isShaking && "animate-shake",
       )}
@@ -163,46 +109,64 @@ export const ToolbarContent: Component<ToolbarContentProps> = (props) => {
     >
       <div
         class={cn(
-          "grid transition-all duration-150 ease-out",
-          expandGridClass(!props.isCollapsed),
+          "grid relative overflow-visible",
+          gridSizeTransitionClass(),
+          props.isCollapsed
+            ? isVertical()
+              ? "grid-rows-[0fr] pointer-events-none"
+              : "grid-cols-[0fr] pointer-events-none"
+            : isVertical()
+              ? "grid-rows-[1fr]"
+              : "grid-cols-[1fr]",
         )}
       >
         <div
           class={cn(
             "flex",
-            isVertical()
-              ? "flex-col items-center min-h-0"
-              : "items-center min-w-0",
+            isVertical() ? "flex-col items-center min-h-0" : "items-center min-w-0",
+            props.isCollapsed ? "opacity-0" : "opacity-100",
+            !props.disableGridTransitions && "transition-opacity duration-150 ease-out",
           )}
         >
           <div
-            class={cn(
-              "grid transition-all duration-150 ease-out",
-              expandGridClass(Boolean(props.enabled)),
-            )}
+            ref={(element) => props.onExpandableButtonsRef?.(element)}
+            class={cn("flex items-center", isVertical() && "flex-col")}
           >
-            <div class={cn("relative overflow-visible", minDimensionClass())}>
-              {props.selectButton ?? defaultSelectButton()}
+            <div class={cn("grid", gridTransitionClass(), expandGridClass(Boolean(props.enabled)))}>
+              <div class={cn("relative overflow-visible", minDimensionClass())}>
+                {props.selectButton}
+              </div>
+            </div>
+            <div
+              class={cn(
+                "grid",
+                gridTransitionClass(),
+                expandGridClass(
+                  Boolean(props.enabled) && Boolean(props.isCommentsExpanded),
+                  "pointer-events-none",
+                ),
+              )}
+            >
+              <div class={cn("relative overflow-visible", minDimensionClass())}>
+                {props.commentsButton}
+              </div>
+            </div>
+            <div
+              class={cn(
+                "grid",
+                gridTransitionClass(),
+                expandGridClass(Boolean(props.isCopyAllExpanded), "pointer-events-none"),
+              )}
+            >
+              <div class={cn("relative overflow-visible", minDimensionClass())}>
+                {props.copyAllButton}
+              </div>
             </div>
           </div>
-          <div
-            class={cn(
-              "grid transition-all duration-150 ease-out",
-              expandGridClass(Boolean(props.enabled)),
-            )}
-          >
-            <div class={cn("relative overflow-visible", minDimensionClass())}>
-              {props.commentButton ?? defaultCommentButton()}
-            </div>
-          </div>
-          {props.historyButton}
-          <div class="relative shrink-0 overflow-visible">
-            {props.toggleButton ?? defaultToggleButton()}
-          </div>
+          <div class="relative shrink-0 overflow-visible">{props.toggleButton}</div>
         </div>
       </div>
       {props.collapseButton ?? defaultCollapseButton()}
-      {props.shakeTooltip}
     </div>
   );
 };

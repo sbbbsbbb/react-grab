@@ -1,6 +1,7 @@
 import { MAX_ARROW_NAVIGATION_HISTORY } from "../constants.js";
 import type { OverlayBounds } from "../types.js";
 import { getElementsAtPoint } from "../utils/get-element-at-position.js";
+import { getVisibleBoundsCenter } from "../utils/get-visible-bounds-center.js";
 import { isElementConnected } from "../utils/is-element-connected.js";
 
 interface ElementValidator {
@@ -22,15 +23,12 @@ export const createArrowNavigator = (
 ): ArrowNavigator => {
   let navigationHistory: Element[] = [];
 
-  const findVerticalNext = (
-    currentElement: Element,
-    direction: 1 | -1,
-  ): Element | null => {
+  const findVerticalNext = (currentElement: Element, direction: 1 | -1): Element | null => {
     const bounds = createElementBounds(currentElement);
-    const elementsAtPoint = getElementsAtPoint(
-      bounds.x + bounds.width / 2,
-      bounds.y + bounds.height / 2,
-    ).filter(isValidGrabbableElement);
+    const probePoint = getVisibleBoundsCenter(bounds);
+    const elementsAtPoint = getElementsAtPoint(probePoint.x, probePoint.y).filter(
+      isValidGrabbableElement,
+    );
 
     const currentIndex = elementsAtPoint.indexOf(currentElement);
     if (currentIndex === -1) return null;
@@ -42,9 +40,7 @@ export const createArrowNavigator = (
     if (nextElement) {
       navigationHistory.push(currentElement);
       if (navigationHistory.length > MAX_ARROW_NAVIGATION_HISTORY) {
-        navigationHistory = navigationHistory.slice(
-          -MAX_ARROW_NAVIGATION_HISTORY,
-        );
+        navigationHistory = navigationHistory.slice(-MAX_ARROW_NAVIGATION_HISTORY);
       }
     }
     return nextElement;
@@ -60,10 +56,7 @@ export const createArrowNavigator = (
     return findVerticalNext(currentElement, -1);
   };
 
-  const findHorizontal = (
-    currentElement: Element,
-    isForward: boolean,
-  ): Element | null => {
+  const findHorizontal = (currentElement: Element, isForward: boolean): Element | null => {
     const findEdgeDescendant = (parentElement: Element): Element | null => {
       const children = Array.from(parentElement.children);
       const ordered = isForward ? children : children.reverse();
@@ -108,11 +101,7 @@ export const createArrowNavigator = (
         }
         if (nextElement) break;
         const parentElement: HTMLElement | null = searchElement.parentElement;
-        if (
-          !isForward &&
-          parentElement &&
-          isValidGrabbableElement(parentElement)
-        ) {
+        if (!isForward && parentElement && isValidGrabbableElement(parentElement)) {
           nextElement = parentElement;
           break;
         }

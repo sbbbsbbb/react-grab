@@ -1,5 +1,6 @@
 import { createStore } from "solid-js/store";
 import type {
+  Position,
   Plugin,
   PluginConfig,
   PluginHooks,
@@ -12,16 +13,14 @@ import type {
   DragRect,
   ElementLabelVariant,
   ElementLabelContext,
-  CrosshairContext,
   ActivationMode,
   ActivationKey,
   SettableOptions,
   AgentContext,
   ActionContext,
-  ScreenshotBounds,
 } from "../types.js";
 import { DEFAULT_THEME, deepMergeTheme } from "./theme.js";
-import { DEFAULT_KEY_HOLD_DURATION_MS } from "../constants.js";
+import { DEFAULT_KEY_HOLD_DURATION_MS, DEFAULT_MAX_CONTEXT_LINES } from "../constants.js";
 
 interface RegisteredPlugin {
   plugin: Plugin;
@@ -42,7 +41,7 @@ const DEFAULT_OPTIONS: OptionsState = {
   activationMode: "toggle",
   keyHoldDuration: DEFAULT_KEY_HOLD_DURATION_MS,
   allowActivationInsideInput: true,
-  maxContextLines: 3,
+  maxContextLines: DEFAULT_MAX_CONTEXT_LINES,
   activationKey: undefined,
   getContent: undefined,
   freezeReactUpdates: true,
@@ -69,7 +68,7 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
   const recomputeStore = () => {
     let mergedTheme: Required<Theme> = DEFAULT_THEME;
     let mergedOptions: OptionsState = { ...DEFAULT_OPTIONS, ...initialOptions };
-    const allActions: ContextMenuAction[] = [];
+    const allContextMenuActions: ContextMenuAction[] = [];
 
     for (const { config } of plugins.values()) {
       if (config.theme) {
@@ -81,7 +80,9 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
       }
 
       if (config.actions) {
-        allActions.push(...config.actions);
+        for (const action of config.actions) {
+          allContextMenuActions.push(action);
+        }
       }
     }
 
@@ -89,19 +90,32 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
 
     setStore("theme", mergedTheme);
     setStore("options", mergedOptions);
-    setStore("actions", allActions);
+    setStore("actions", allContextMenuActions);
   };
 
+  const setOption = <OptionKey extends keyof OptionsState>(
+    optionKey: OptionKey,
+    optionValue: OptionsState[OptionKey],
+  ) => {
+    directOptionOverrides[optionKey] = optionValue;
+    setStore("options", optionKey, optionValue);
+  };
+
+  const SETTABLE_OPTION_KEYS: Array<keyof OptionsState> = [
+    "activationMode",
+    "keyHoldDuration",
+    "allowActivationInsideInput",
+    "maxContextLines",
+    "activationKey",
+    "getContent",
+    "freezeReactUpdates",
+  ];
+
   const setOptions = (optionUpdates: SettableOptions) => {
-    for (const [optionKey, optionValue] of Object.entries(optionUpdates)) {
-      if (optionValue === undefined) continue;
-      (directOptionOverrides as Record<string, unknown>)[optionKey] =
-        optionValue;
-      setStore(
-        "options",
-        optionKey as keyof OptionsState,
-        optionValue as OptionsState[keyof OptionsState],
-      );
+    for (const optionKey of SETTABLE_OPTION_KEYS) {
+      if (optionUpdates[optionKey] !== undefined) {
+        setOption(optionKey, optionUpdates[optionKey]!);
+      }
     }
   };
 
@@ -110,14 +124,11 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
       unregister(plugin.name);
     }
 
-    const config: PluginConfig = plugin.setup?.(api) ?? {};
+    const config: PluginConfig = plugin.setup?.(api, hooks) ?? {};
 
     if (plugin.theme) {
       config.theme = config.theme
-        ? deepMergeTheme(
-            deepMergeTheme(DEFAULT_THEME, plugin.theme),
-            config.theme,
-          )
+        ? deepMergeTheme(deepMergeTheme(DEFAULT_THEME, plugin.theme), config.theme)
         : plugin.theme;
     }
 
@@ -126,15 +137,11 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
     }
 
     if (plugin.hooks) {
-      config.hooks = config.hooks
-        ? { ...plugin.hooks, ...config.hooks }
-        : plugin.hooks;
+      config.hooks = config.hooks ? { ...plugin.hooks, ...config.hooks } : plugin.hooks;
     }
 
     if (plugin.options) {
-      config.options = config.options
-        ? { ...plugin.options, ...config.options }
-        : plugin.options;
+      config.options = config.options ? { ...plugin.options, ...config.options } : plugin.options;
     }
 
     plugins.set(plugin.name, { plugin, config });
@@ -179,9 +186,7 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
     let handled = false;
     for (const { config } of plugins.values()) {
       const hook = config.hooks?.[hookName] as
-        | ((
-            ...hookArgs: Parameters<NonNullable<PluginHooks[K]>>
-          ) => boolean | void)
+        | ((...hookArgs: Parameters<NonNullable<PluginHooks[K]>>) => boolean | void)
         | undefined;
       if (hook) {
         const result = hook(...args);
@@ -247,13 +252,28 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
     onActivate: () => callHook("onActivate"),
     onDeactivate: () => callHook("onDeactivate"),
     onElementHover: (element: Element) => callHook("onElementHover", element),
-    onElementSelect: (element: Element) => callHook("onElementSelect", element),
-    onDragStart: (startX: number, startY: number) =>
-      callHook("onDragStart", startX, startY),
-    onDragEnd: (elements: Element[], bounds: DragRect) =>
-      callHook("onDragEnd", elements, bounds),
-    onBeforeCopy: async (elements: Element[]) =>
-      callHookAsync("onBeforeCopy", elements),
+    onElementSelect: (
+      element: Element,
+    ): { wasIntercepted: boolean; pendingResult?: Promise<boolean> } => {
+      let wasIntercepted = false;
+      let pendingResult: Promise<boolean> | undefined;
+      for (const { config } of plugins.values()) {
+        const hook = config.hooks?.onElementSelect;
+        if (hook) {
+          const result = hook(element);
+          if (result === true) {
+            wasIntercepted = true;
+          } else if (result instanceof Promise) {
+            wasIntercepted = true;
+            pendingResult = result;
+          }
+        }
+      }
+      return { wasIntercepted, pendingResult };
+    },
+    onDragStart: (startX: number, startY: number) => callHook("onDragStart", startX, startY),
+    onDragEnd: (elements: Element[], bounds: DragRect) => callHook("onDragEnd", elements, bounds),
+    onBeforeCopy: async (elements: Element[]) => callHookAsync("onBeforeCopy", elements),
     transformCopyContent: async (content: string, elements: Element[]) =>
       callHookReduce("transformCopyContent", content, elements),
     onAfterCopy: (elements: Element[], success: boolean) =>
@@ -264,11 +284,8 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
     onStateChange: (state: ReactGrabState) => callHook("onStateChange", state),
     onPromptModeChange: (isPromptMode: boolean, context: PromptModeContext) =>
       callHook("onPromptModeChange", isPromptMode, context),
-    onSelectionBox: (
-      visible: boolean,
-      bounds: OverlayBounds | null,
-      element: Element | null,
-    ) => callHook("onSelectionBox", visible, bounds, element),
+    onSelectionBox: (visible: boolean, bounds: OverlayBounds | null, element: Element | null) =>
+      callHook("onSelectionBox", visible, bounds, element),
     onDragBox: (visible: boolean, bounds: OverlayBounds | null) =>
       callHook("onDragBox", visible, bounds),
     onGrabbedBox: (bounds: OverlayBounds, element: Element) =>
@@ -278,28 +295,18 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
       variant: ElementLabelVariant,
       context: ElementLabelContext,
     ) => callHook("onElementLabel", visible, variant, context),
-    onCrosshair: (visible: boolean, context: CrosshairContext) =>
-      callHook("onCrosshair", visible, context),
-    onContextMenu: (element: Element, position: { x: number; y: number }) =>
+    onContextMenu: (element: Element, position: Position) =>
       callHook("onContextMenu", element, position),
     onOpenFile: (filePath: string, lineNumber?: number) =>
       callHookWithHandled("onOpenFile", filePath, lineNumber),
     transformHtmlContent: async (html: string, elements: Element[]) =>
       callHookReduce("transformHtmlContent", html, elements),
-    transformScreenshot: async (
-      blob: Blob,
-      elements: Element[],
-      bounds: ScreenshotBounds,
-    ) => callHookReduce("transformScreenshot", blob, elements, bounds),
     transformAgentContext: async (context: AgentContext, elements: Element[]) =>
       callHookReduce("transformAgentContext", context, elements),
     transformActionContext: (context: ActionContext) =>
       callHookReduceSync("transformActionContext", context),
-    transformOpenFileUrl: (
-      url: string,
-      filePath: string,
-      lineNumber?: number,
-    ) => callHookReduceSync("transformOpenFileUrl", url, filePath, lineNumber),
+    transformOpenFileUrl: (url: string, filePath: string, lineNumber?: number) =>
+      callHookReduceSync("transformOpenFileUrl", url, filePath, lineNumber),
     transformSnippet: async (snippet: string, element: Element) =>
       callHookReduce("transformSnippet", snippet, element),
   };

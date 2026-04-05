@@ -1,12 +1,10 @@
-import { vi, describe, expect, it, beforeEach } from "vitest";
+import { vi, describe, expect, it, beforeEach } from "vite-plus/test";
 import {
   detectFramework,
   detectMonorepo,
   detectNextRouterType,
   detectReactGrab,
-  detectInstalledAgents,
   detectUnsupportedFramework,
-  detectAvailableAgentCLIs,
 } from "../src/utils/detect.js";
 
 vi.mock("node:fs", () => ({
@@ -14,16 +12,10 @@ vi.mock("node:fs", () => ({
   readFileSync: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  execSync: vi.fn(),
-}));
-
 import { existsSync, readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
 
 const mockExistsSync = vi.mocked(existsSync);
 const mockReadFileSync = vi.mocked(readFileSync);
-const mockExecSync = vi.mocked(execSync);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -41,27 +33,21 @@ describe("detectFramework", () => {
 
   it("should detect Vite", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ devDependencies: { vite: "5.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ devDependencies: { vite: "5.0.0" } }));
 
     expect(detectFramework("/test")).toBe("vite");
   });
 
   it("should detect Webpack", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ devDependencies: { webpack: "5.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ devDependencies: { webpack: "5.0.0" } }));
 
     expect(detectFramework("/test")).toBe("webpack");
   });
 
   it("should return unknown when no framework detected", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { react: "18.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { react: "18.0.0" } }));
 
     expect(detectFramework("/test")).toBe("unknown");
   });
@@ -162,9 +148,7 @@ describe("detectMonorepo", () => {
     mockExistsSync.mockImplementation((path) => {
       return String(path).endsWith("package.json");
     });
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ workspaces: ["packages/*"] }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ workspaces: ["packages/*"] }));
 
     expect(detectMonorepo("/test")).toBe(true);
   });
@@ -173,9 +157,7 @@ describe("detectMonorepo", () => {
     mockExistsSync.mockImplementation((path) => {
       return String(path).endsWith("package.json");
     });
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { react: "18.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { react: "18.0.0" } }));
 
     expect(detectMonorepo("/test")).toBe(false);
   });
@@ -184,9 +166,7 @@ describe("detectMonorepo", () => {
 describe("detectReactGrab", () => {
   it("should detect react-grab in dependencies", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { "react-grab": "1.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { "react-grab": "1.0.0" } }));
 
     expect(detectReactGrab("/test")).toBe(true);
   });
@@ -202,9 +182,7 @@ describe("detectReactGrab", () => {
 
   it("should return false when react-grab is not installed", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { react: "18.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { react: "18.0.0" } }));
 
     expect(detectReactGrab("/test")).toBe(false);
   });
@@ -220,61 +198,6 @@ describe("detectReactGrab", () => {
     mockReadFileSync.mockReturnValue("not valid json");
 
     expect(detectReactGrab("/test")).toBe(false);
-  });
-});
-
-describe("detectInstalledAgents", () => {
-  it("should detect installed agents", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({
-        devDependencies: {
-          "@react-grab/cursor": "1.0.0",
-          "@react-grab/claude-code": "1.0.0",
-        },
-      }),
-    );
-
-    const agents = detectInstalledAgents("/test");
-    expect(agents).toContain("cursor");
-    expect(agents).toContain("claude-code");
-    expect(agents).not.toContain("opencode");
-  });
-
-  it("should return empty array when no agents installed", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { "react-grab": "1.0.0" } }),
-    );
-
-    expect(detectInstalledAgents("/test")).toEqual([]);
-  });
-
-  it("should return empty array when no package.json exists", () => {
-    mockExistsSync.mockReturnValue(false);
-
-    expect(detectInstalledAgents("/test")).toEqual([]);
-  });
-
-  it("should return empty array for malformed package.json", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue("{ broken }");
-
-    expect(detectInstalledAgents("/test")).toEqual([]);
-  });
-
-  it("should detect mcp when @react-grab/mcp is installed", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({
-        devDependencies: {
-          "@react-grab/mcp": "0.1.0",
-        },
-      }),
-    );
-
-    const agents = detectInstalledAgents("/test");
-    expect(agents).toContain("mcp");
   });
 });
 
@@ -301,9 +224,7 @@ describe("detectUnsupportedFramework", () => {
 
   it("should detect Astro", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ devDependencies: { astro: "4.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ devDependencies: { astro: "4.0.0" } }));
 
     expect(detectUnsupportedFramework("/test")).toBe("astro");
   });
@@ -319,18 +240,14 @@ describe("detectUnsupportedFramework", () => {
 
   it("should detect Gatsby", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { gatsby: "5.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { gatsby: "5.0.0" } }));
 
     expect(detectUnsupportedFramework("/test")).toBe("gatsby");
   });
 
   it("should return null for supported frameworks", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { next: "14.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { next: "14.0.0" } }));
 
     expect(detectUnsupportedFramework("/test")).toBe(null);
   });
@@ -346,42 +263,5 @@ describe("detectUnsupportedFramework", () => {
     mockReadFileSync.mockReturnValue("invalid json");
 
     expect(detectUnsupportedFramework("/test")).toBe(null);
-  });
-});
-
-describe("detectAvailableAgentCLIs", () => {
-  it("should return all available CLIs", () => {
-    mockExecSync.mockImplementation(() => Buffer.from(""));
-
-    const available = detectAvailableAgentCLIs();
-    expect(available).toContain("claude");
-    expect(available).toContain("cursor-agent");
-    expect(available).toContain("opencode");
-  });
-
-  it("should return only available CLIs", () => {
-    mockExecSync.mockImplementation((command) => {
-      const commandString = String(command);
-      if (commandString.includes("claude")) {
-        return Buffer.from("/usr/local/bin/claude");
-      }
-      if (commandString.includes("opencode")) {
-        return Buffer.from("/usr/local/bin/opencode");
-      }
-      throw new Error("Command not found");
-    });
-
-    const available = detectAvailableAgentCLIs();
-    expect(available).toContain("claude");
-    expect(available).toContain("opencode");
-    expect(available).not.toContain("cursor-agent");
-  });
-
-  it("should return empty array when no CLIs are available", () => {
-    mockExecSync.mockImplementation(() => {
-      throw new Error("Command not found");
-    });
-
-    expect(detectAvailableAgentCLIs()).toEqual([]);
   });
 });

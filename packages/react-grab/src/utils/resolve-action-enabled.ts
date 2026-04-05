@@ -1,11 +1,18 @@
 import type { ActionContext, ContextMenuAction } from "../types.js";
 
+const resolveBooleanEnabled = (enabled: boolean | undefined): boolean => enabled ?? true;
+
 export const resolveActionEnabled = (
   action: ContextMenuAction,
   context: ActionContext | undefined,
 ): boolean => {
   if (typeof action.enabled === "function") {
-    return context ? action.enabled(context) : false;
+    if (!context) {
+      return false;
+    }
+
+    return action.enabled(context);
   }
-  return action.enabled ?? true;
+
+  return resolveBooleanEnabled(action.enabled);
 };

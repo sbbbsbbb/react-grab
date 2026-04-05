@@ -4,17 +4,8 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { detectNonInteractive } from "../utils/is-non-interactive.js";
 import { prompts } from "../utils/prompts.js";
-import {
-  applyPackageJsonWithFeedback,
-  applyTransformWithFeedback,
-  formatInstalledAgentNames,
-  installPackagesWithFeedback,
-  uninstallPackagesWithFeedback,
-} from "../utils/cli-helpers.js";
-import {
-  promptConnectionMode,
-  promptMcpInstall,
-} from "../utils/install-mcp.js";
+import { applyTransformWithFeedback, installPackagesWithFeedback } from "../utils/cli-helpers.js";
+import { promptMcpInstall } from "../utils/install-mcp.js";
 import {
   detectProject,
   findReactProjects,
@@ -26,25 +17,15 @@ import {
 import { printDiff } from "../utils/diff.js";
 import { handleError } from "../utils/handle-error.js";
 import { highlighter } from "../utils/highlighter.js";
-import {
-  getPackagesToInstall,
-  getPackagesToUninstall,
-} from "../utils/install.js";
+import { getPackagesToInstall } from "../utils/install.js";
 import { logger } from "../utils/logger.js";
 import { spinner } from "../utils/spinner.js";
 import {
-  AGENTS,
-  type AgentIntegration,
-  getAgentDisplayName,
-} from "../utils/templates.js";
-import {
-  previewAgentRemoval,
   previewOptionsTransform,
-  previewPackageJsonAgentRemoval,
-  previewPackageJsonTransform,
   previewTransform,
   type ReactGrabOptions,
 } from "../utils/transform.js";
+import { formatActivationKeyDisplay } from "../utils/format-activation-key.js";
 
 const VERSION = process.env.VERSION ?? "0.0.1";
 const REPORT_URL = "https://react-grab.com/api/report-cli";
@@ -58,11 +39,7 @@ interface ReportConfig {
   isMonorepo: boolean;
 }
 
-const reportToCli = (
-  type: "error" | "completed",
-  config?: ReportConfig,
-  error?: Error,
-): void => {
+const reportToCli = (type: "error" | "completed", config?: ReportConfig, error?: Error): void => {
   fetch(REPORT_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -91,33 +68,21 @@ const PACKAGE_MANAGER_NAMES: Record<PackageManager, string> = {
   bun: "Bun",
 };
 
-const UNSUPPORTED_FRAMEWORK_NAMES: Record<
-  NonNullable<UnsupportedFramework>,
-  string
-> = {
+const UNSUPPORTED_FRAMEWORK_NAMES: Record<NonNullable<UnsupportedFramework>, string> = {
   remix: "Remix",
   astro: "Astro",
   sveltekit: "SvelteKit",
   gatsby: "Gatsby",
 };
 
-const getAgentName = getAgentDisplayName;
-
-const sortProjectsByFramework = (
-  projects: WorkspaceProject[],
-): WorkspaceProject[] =>
+const sortProjectsByFramework = (projects: WorkspaceProject[]): WorkspaceProject[] =>
   [...projects].sort((projectA, projectB) => {
-    if (projectA.framework === "unknown" && projectB.framework !== "unknown")
-      return 1;
-    if (projectA.framework !== "unknown" && projectB.framework === "unknown")
-      return -1;
+    if (projectA.framework === "unknown" && projectB.framework !== "unknown") return 1;
+    if (projectA.framework !== "unknown" && projectB.framework === "unknown") return -1;
     return 0;
   });
 
-const printSubprojects = (
-  searchRoot: string,
-  sortedProjects: WorkspaceProject[],
-): void => {
+const printSubprojects = (searchRoot: string, sortedProjects: WorkspaceProject[]): void => {
   logger.break();
   logger.log("Found the following projects:");
   logger.break();
@@ -132,58 +97,26 @@ const printSubprojects = (
     );
   }
   logger.break();
-  logger.log(
-    `Re-run with ${highlighter.info("-c <path>")} to specify a project:`,
-  );
+  logger.log(`Re-run with ${highlighter.info("-c <path>")} to specify a project:`);
   logger.break();
   logger.log(
-    `  ${highlighter.dim("$")} npx -y grab@latest init -c ${relative(searchRoot, sortedProjects[0].path)}`,
+    `  ${highlighter.dim("$")} npx grab@latest init -c ${relative(searchRoot, sortedProjects[0].path)}`,
   );
   logger.break();
-};
-
-const formatActivationKeyDisplay = (
-  activationKey: ReactGrabOptions["activationKey"],
-): string => {
-  if (!activationKey) return "Default (Option/Alt)";
-  return activationKey
-    .split("+")
-    .map((part) => {
-      const lower = part.toLowerCase();
-      if (lower === "meta") return process.platform === "darwin" ? "⌘" : "Win";
-      if (lower === "alt") return process.platform === "darwin" ? "⌥" : "Alt";
-      if (lower === "ctrl") return "Ctrl";
-      if (lower === "shift") return "Shift";
-      if (lower === "space" || lower === " ") return "Space";
-      return part.toUpperCase();
-    })
-    .join(" + ");
 };
 
 export const init = new Command()
   .name("init")
+  .alias("setup")
   .description("initialize React Grab in your project")
   .option("-y, --yes", "skip confirmation prompts", false)
   .option("-f, --force", "force overwrite existing config", false)
-  .option(
-    "-a, --agent <agent>",
-    `connect to your agent (${AGENTS.join(", ")}, mcp)`,
-  )
-  .option(
-    "-k, --key <key>",
-    "activation key (e.g., Meta+K, Ctrl+Shift+G, Space)",
-  )
+  .option("-k, --key <key>", "activation key (e.g., Meta+K, Ctrl+Shift+G, Space)")
   .option("--skip-install", "skip package installation", false)
   .option("--pkg <pkg>", "custom package URL for CLI (e.g., grab)")
-  .option(
-    "-c, --cwd <cwd>",
-    "working directory (defaults to current directory)",
-    process.cwd(),
-  )
+  .option("-c, --cwd <cwd>", "working directory (defaults to current directory)", process.cwd())
   .action(async (opts) => {
-    console.log(
-      `${pc.magenta("✿")} ${pc.bold("React Grab")} ${pc.gray(VERSION)}`,
-    );
+    console.log(`${pc.magenta("✿")} ${pc.bold("React Grab")} ${pc.gray(VERSION)}`);
     console.log();
 
     try {
@@ -201,54 +134,6 @@ export const init = new Command()
 
       const projectInfo = await detectProject(cwd);
 
-      const removeAgents = async (
-        agentsToRemove: string[],
-        skipInstall: boolean = false,
-      ) => {
-        for (const agentToRemove of agentsToRemove) {
-          const removalResult = previewAgentRemoval(
-            projectInfo.projectRoot,
-            projectInfo.framework,
-            projectInfo.nextRouterType,
-            agentToRemove,
-          );
-          const removalPackageJsonResult = previewPackageJsonAgentRemoval(
-            projectInfo.projectRoot,
-            agentToRemove,
-          );
-
-          if (!skipInstall) {
-            uninstallPackagesWithFeedback(
-              getPackagesToUninstall(agentToRemove),
-              projectInfo.packageManager,
-              projectInfo.projectRoot,
-            );
-          }
-
-          if (
-            removalResult.success &&
-            !removalResult.noChanges &&
-            removalResult.newContent
-          ) {
-            applyTransformWithFeedback(
-              removalResult,
-              `Removing ${getAgentName(agentToRemove)} from ${removalResult.filePath}.`,
-            );
-          }
-
-          if (
-            removalPackageJsonResult.success &&
-            !removalPackageJsonResult.noChanges &&
-            removalPackageJsonResult.newContent
-          ) {
-            applyPackageJsonWithFeedback(
-              removalPackageJsonResult,
-              `Removing ${getAgentName(agentToRemove)} from ${removalPackageJsonResult.filePath}.`,
-            );
-          }
-        }
-      };
-
       if (projectInfo.hasReactGrab && !opts.force) {
         preflightSpinner.succeed();
 
@@ -265,13 +150,6 @@ export const init = new Command()
         logger.break();
         logger.success("React Grab is already installed.");
         logger.break();
-
-        if (projectInfo.installedAgents.length > 0) {
-          logger.log(
-            `Currently installed agents: ${highlighter.info(formatInstalledAgentNames(projectInfo.installedAgents))}`,
-          );
-          logger.break();
-        }
 
         const { wantCustomizeOptions } = await prompts({
           type: "confirm",
@@ -323,9 +201,7 @@ export const init = new Command()
                 process.exit(1);
               }
 
-              collectedOptions.activationKey = key
-                ? key.toLowerCase()
-                : undefined;
+              collectedOptions.activationKey = key ? key.toLowerCase() : undefined;
 
               logger.log(
                 `  Activation key: ${highlighter.info(formatActivationKeyDisplay(collectedOptions.activationKey))}`,
@@ -384,8 +260,7 @@ export const init = new Command()
             process.exit(1);
           }
 
-          collectedOptions.allowActivationInsideInput =
-            allowActivationInsideInput;
+          collectedOptions.allowActivationInsideInput = allowActivationInsideInput;
 
           const { maxContextLines } = await prompts({
             type: "number",
@@ -418,9 +293,7 @@ export const init = new Command()
           }
 
           const hasOptionsChanges =
-            !optionsResult.noChanges &&
-            optionsResult.originalContent &&
-            optionsResult.newContent;
+            !optionsResult.noChanges && optionsResult.originalContent && optionsResult.newContent;
 
           if (hasOptionsChanges) {
             logger.break();
@@ -453,386 +326,28 @@ export const init = new Command()
           }
         }
 
-        const availableAgents = AGENTS.filter(
-          (agent) => !projectInfo.installedAgents.includes(agent),
-        );
-
         logger.break();
-        const { wantAddAgent } = await prompts({
+        const { wantAddMcp } = await prompts({
           type: "confirm",
-          name: "wantAddAgent",
-          message: `Would you like to ${highlighter.info("connect it to your agent")}?`,
+          name: "wantAddMcp",
+          message: `Would you like to ${highlighter.info("connect it to your agent via MCP")}?`,
           initial: false,
         });
 
-        if (wantAddAgent === undefined) {
+        if (wantAddMcp === undefined) {
           logger.break();
           process.exit(1);
         }
 
-        if (wantAddAgent) {
-          const connectionMode = await promptConnectionMode();
-
-          if (connectionMode === undefined) {
+        if (wantAddMcp) {
+          const didInstall = await promptMcpInstall();
+          if (!didInstall) {
             logger.break();
-            process.exit(1);
+            process.exit(0);
           }
-
-          let agentIntegration: AgentIntegration;
-
-          if (connectionMode === "mcp") {
-            const didInstall = await promptMcpInstall();
-            if (!didInstall) {
-              logger.break();
-              process.exit(0);
-            }
-            logger.break();
-            logger.success("MCP server has been configured.");
-            logger.log("Restart your agents to activate.");
-            agentIntegration = "mcp";
-            projectInfo.installedAgents = ["mcp"];
-
-            const result = previewTransform(
-              projectInfo.projectRoot,
-              projectInfo.framework,
-              projectInfo.nextRouterType,
-              agentIntegration,
-              true,
-            );
-
-            const packageJsonResult = previewPackageJsonTransform(
-              projectInfo.projectRoot,
-              agentIntegration,
-              projectInfo.installedAgents,
-              projectInfo.packageManager,
-            );
-
-            if (!result.success) {
-              logger.break();
-              logger.error(result.message);
-              logger.break();
-              process.exit(1);
-            }
-
-            const hasLayoutChanges =
-              !result.noChanges && result.originalContent && result.newContent;
-            const hasPackageJsonChanges =
-              packageJsonResult.success &&
-              !packageJsonResult.noChanges &&
-              packageJsonResult.originalContent &&
-              packageJsonResult.newContent;
-
-            if (hasLayoutChanges || hasPackageJsonChanges) {
-              logger.break();
-
-              if (hasLayoutChanges) {
-                printDiff(
-                  result.filePath,
-                  result.originalContent!,
-                  result.newContent!,
-                );
-              }
-
-              if (hasPackageJsonChanges) {
-                if (hasLayoutChanges) {
-                  logger.break();
-                }
-                printDiff(
-                  packageJsonResult.filePath,
-                  packageJsonResult.originalContent!,
-                  packageJsonResult.newContent!,
-                );
-              }
-
-              logger.break();
-              const { proceed } = await prompts({
-                type: "confirm",
-                name: "proceed",
-                message: "Apply these changes?",
-                initial: true,
-              });
-
-              if (!proceed) {
-                logger.break();
-                logger.log("Agent addition cancelled.");
-              } else {
-                installPackagesWithFeedback(
-                  getPackagesToInstall(agentIntegration, false),
-                  projectInfo.packageManager,
-                  projectInfo.projectRoot,
-                );
-
-                if (hasLayoutChanges) {
-                  applyTransformWithFeedback(result);
-                }
-
-                if (hasPackageJsonChanges) {
-                  applyPackageJsonWithFeedback(packageJsonResult);
-                }
-
-                logger.break();
-                logger.success(
-                  `${getAgentName(agentIntegration)} has been added.`,
-                );
-              }
-            }
-          } else {
-            const { agent } = await prompts({
-              type: "select",
-              name: "agent",
-              message: `Which ${highlighter.info("agent")} would you like to connect?`,
-              choices: [
-                ...availableAgents.map((innerAgent) => ({
-                  title: getAgentName(innerAgent),
-                  value: innerAgent,
-                })),
-                { title: "Skip", value: "skip" },
-              ],
-            });
-
-            if (agent === undefined || agent === "skip") {
-              logger.break();
-              process.exit(0);
-            }
-
-            agentIntegration = agent as AgentIntegration;
-            let agentsToRemove: string[] = [];
-
-            if (projectInfo.installedAgents.length > 0) {
-              const installedNames = formatInstalledAgentNames(
-                projectInfo.installedAgents,
-              );
-
-              const { action } = await prompts({
-                type: "select",
-                name: "action",
-                message: "How would you like to proceed?",
-                choices: [
-                  {
-                    title: `Replace ${installedNames} with ${getAgentName(agentIntegration)}`,
-                    value: "replace",
-                  },
-                  {
-                    title: `Add ${getAgentName(agentIntegration)} alongside existing`,
-                    value: "add",
-                  },
-                  { title: "Cancel", value: "cancel" },
-                ],
-              });
-
-              if (!action || action === "cancel") {
-                logger.break();
-                logger.log("Agent addition cancelled.");
-              } else {
-                if (action === "replace") {
-                  agentsToRemove = [...projectInfo.installedAgents];
-                }
-
-                if (agentsToRemove.length > 0) {
-                  await removeAgents(agentsToRemove);
-                  projectInfo.installedAgents =
-                    projectInfo.installedAgents.filter(
-                      (innerAgent) => !agentsToRemove.includes(innerAgent),
-                    );
-                }
-
-                const result = previewTransform(
-                  projectInfo.projectRoot,
-                  projectInfo.framework,
-                  projectInfo.nextRouterType,
-                  agentIntegration,
-                  true,
-                );
-
-                const packageJsonResult = previewPackageJsonTransform(
-                  projectInfo.projectRoot,
-                  agentIntegration,
-                  projectInfo.installedAgents,
-                  projectInfo.packageManager,
-                );
-
-                if (!result.success) {
-                  logger.break();
-                  logger.error(result.message);
-                  logger.break();
-                  process.exit(1);
-                }
-
-                const hasLayoutChanges =
-                  !result.noChanges &&
-                  result.originalContent &&
-                  result.newContent;
-                const hasPackageJsonChanges =
-                  packageJsonResult.success &&
-                  !packageJsonResult.noChanges &&
-                  packageJsonResult.originalContent &&
-                  packageJsonResult.newContent;
-
-                if (hasLayoutChanges || hasPackageJsonChanges) {
-                  logger.break();
-
-                  if (hasLayoutChanges) {
-                    printDiff(
-                      result.filePath,
-                      result.originalContent!,
-                      result.newContent!,
-                    );
-                  }
-
-                  if (hasPackageJsonChanges) {
-                    if (hasLayoutChanges) {
-                      logger.break();
-                    }
-                    printDiff(
-                      packageJsonResult.filePath,
-                      packageJsonResult.originalContent!,
-                      packageJsonResult.newContent!,
-                    );
-                  }
-
-                  if (agentsToRemove.length === 0) {
-                    logger.break();
-                    const { proceed } = await prompts({
-                      type: "confirm",
-                      name: "proceed",
-                      message: "Apply these changes?",
-                      initial: true,
-                    });
-
-                    if (!proceed) {
-                      logger.break();
-                      logger.log("Agent addition cancelled.");
-                    } else {
-                      installPackagesWithFeedback(
-                        getPackagesToInstall(agentIntegration, false),
-                        projectInfo.packageManager,
-                        projectInfo.projectRoot,
-                      );
-
-                      if (hasLayoutChanges) {
-                        applyTransformWithFeedback(result);
-                      }
-
-                      if (hasPackageJsonChanges) {
-                        applyPackageJsonWithFeedback(packageJsonResult);
-                      }
-
-                      logger.break();
-                      logger.success(
-                        `${getAgentName(agentIntegration)} has been added.`,
-                      );
-                    }
-                  } else {
-                    installPackagesWithFeedback(
-                      getPackagesToInstall(agentIntegration, false),
-                      projectInfo.packageManager,
-                      projectInfo.projectRoot,
-                    );
-
-                    if (hasLayoutChanges) {
-                      applyTransformWithFeedback(result);
-                    }
-
-                    if (hasPackageJsonChanges) {
-                      applyPackageJsonWithFeedback(packageJsonResult);
-                    }
-
-                    logger.break();
-                    logger.success(
-                      `${getAgentName(agentIntegration)} has been added.`,
-                    );
-                  }
-                }
-              }
-            } else {
-              const result = previewTransform(
-                projectInfo.projectRoot,
-                projectInfo.framework,
-                projectInfo.nextRouterType,
-                agentIntegration,
-                true,
-              );
-
-              const packageJsonResult = previewPackageJsonTransform(
-                projectInfo.projectRoot,
-                agentIntegration,
-                projectInfo.installedAgents,
-                projectInfo.packageManager,
-              );
-
-              if (!result.success) {
-                logger.break();
-                logger.error(result.message);
-                logger.break();
-                process.exit(1);
-              }
-
-              const hasLayoutChanges =
-                !result.noChanges &&
-                result.originalContent &&
-                result.newContent;
-              const hasPackageJsonChanges =
-                packageJsonResult.success &&
-                !packageJsonResult.noChanges &&
-                packageJsonResult.originalContent &&
-                packageJsonResult.newContent;
-
-              if (hasLayoutChanges || hasPackageJsonChanges) {
-                logger.break();
-
-                if (hasLayoutChanges) {
-                  printDiff(
-                    result.filePath,
-                    result.originalContent!,
-                    result.newContent!,
-                  );
-                }
-
-                if (hasPackageJsonChanges) {
-                  if (hasLayoutChanges) {
-                    logger.break();
-                  }
-                  printDiff(
-                    packageJsonResult.filePath,
-                    packageJsonResult.originalContent!,
-                    packageJsonResult.newContent!,
-                  );
-                }
-
-                logger.break();
-                const { proceed } = await prompts({
-                  type: "confirm",
-                  name: "proceed",
-                  message: "Apply these changes?",
-                  initial: true,
-                });
-
-                if (!proceed) {
-                  logger.break();
-                  logger.log("Agent addition cancelled.");
-                } else {
-                  installPackagesWithFeedback(
-                    getPackagesToInstall(agentIntegration, false),
-                    projectInfo.packageManager,
-                    projectInfo.projectRoot,
-                  );
-
-                  if (hasLayoutChanges) {
-                    applyTransformWithFeedback(result);
-                  }
-
-                  if (hasPackageJsonChanges) {
-                    applyPackageJsonWithFeedback(packageJsonResult);
-                  }
-
-                  logger.break();
-                  logger.success(
-                    `${getAgentName(agentIntegration)} has been added.`,
-                  );
-                }
-              }
-            }
-          }
+          logger.break();
+          logger.success("MCP server has been configured.");
+          logger.log("Restart your agents to activate.");
         }
 
         logger.break();
@@ -844,8 +359,7 @@ export const init = new Command()
       const frameworkSpinner = spinner("Verifying framework.").start();
 
       if (projectInfo.unsupportedFramework) {
-        const frameworkName =
-          UNSUPPORTED_FRAMEWORK_NAMES[projectInfo.unsupportedFramework];
+        const frameworkName = UNSUPPORTED_FRAMEWORK_NAMES[projectInfo.unsupportedFramework];
         frameworkSpinner.fail(`Found ${highlighter.info(frameworkName)}.`);
         logger.break();
         logger.log(`${frameworkName} is not yet supported by automatic setup.`);
@@ -910,9 +424,7 @@ export const init = new Command()
         } else {
           frameworkSpinner.fail("Could not detect a supported framework.");
           logger.break();
-          logger.log(
-            "React Grab supports Next.js, Vite, TanStack Start, and Webpack projects.",
-          );
+          logger.log("React Grab supports Next.js, Vite, TanStack Start, and Webpack projects.");
           logger.log(`Visit ${highlighter.info(DOCS_URL)} for manual setup.`);
           logger.break();
           process.exit(1);
@@ -930,9 +442,7 @@ export const init = new Command()
         );
       }
 
-      const packageManagerSpinner = spinner(
-        "Detecting package manager.",
-      ).start();
+      const packageManagerSpinner = spinner("Detecting package manager.").start();
       packageManagerSpinner.succeed(
         `Detecting package manager. Found ${highlighter.info(PACKAGE_MANAGER_NAMES[projectInfo.packageManager])}.`,
       );
@@ -940,66 +450,32 @@ export const init = new Command()
       const finalFramework = projectInfo.framework;
       const finalPackageManager = projectInfo.packageManager;
       const finalNextRouterType = projectInfo.nextRouterType;
-      let agentIntegration: AgentIntegration =
-        (opts.agent as AgentIntegration) || "none";
-      const agentsToRemove: string[] = [];
+      let didInstallMcp = false;
 
-      if (!isNonInteractive && !opts.agent) {
+      if (!isNonInteractive) {
         logger.break();
-        const { wantAddAgent } = await prompts({
+        const { wantAddMcp } = await prompts({
           type: "confirm",
-          name: "wantAddAgent",
-          message: `Would you like to ${highlighter.info("connect it to your agent")}?`,
+          name: "wantAddMcp",
+          message: `Would you like to ${highlighter.info("connect it to your agent via MCP")}?`,
           initial: false,
         });
 
-        if (wantAddAgent === undefined) {
+        if (wantAddMcp === undefined) {
           logger.break();
           process.exit(1);
         }
 
-        if (wantAddAgent) {
-          const connectionMode = await promptConnectionMode();
-
-          if (connectionMode === undefined) {
+        if (wantAddMcp) {
+          didInstallMcp = Boolean(await promptMcpInstall());
+          if (!didInstallMcp) {
             logger.break();
-            process.exit(1);
+            process.exit(0);
           }
-
-          if (connectionMode === "mcp") {
-            const didInstall = await promptMcpInstall();
-            if (!didInstall) {
-              logger.break();
-              process.exit(0);
-            }
-            logger.break();
-            logger.success("MCP server has been configured.");
-            logger.log("Continuing with React Grab installation...");
-            logger.break();
-            agentIntegration = "mcp";
-          } else {
-            const { agent } = await prompts({
-              type: "select",
-              name: "agent",
-              message: `Which ${highlighter.info("agent")} would you like to connect?`,
-              choices: [
-                ...AGENTS.map((innerAgent) => ({
-                  title: getAgentName(innerAgent),
-                  value: innerAgent,
-                })),
-                { title: "Skip", value: "skip" },
-              ],
-            });
-
-            if (agent === undefined) {
-              logger.break();
-              process.exit(1);
-            }
-
-            if (agent !== "skip") {
-              agentIntegration = agent as AgentIntegration;
-            }
-          }
+          logger.break();
+          logger.success("MCP server has been configured.");
+          logger.log("Continuing with React Grab installation...");
+          logger.break();
         }
       }
 
@@ -1007,15 +483,8 @@ export const init = new Command()
         projectInfo.projectRoot,
         finalFramework,
         finalNextRouterType,
-        agentIntegration,
         false,
-      );
-
-      const packageJsonResult = previewPackageJsonTransform(
-        projectInfo.projectRoot,
-        agentIntegration,
-        projectInfo.installedAgents,
-        finalPackageManager,
+        opts.force,
       );
 
       if (!result.success) {
@@ -1026,35 +495,12 @@ export const init = new Command()
         process.exit(1);
       }
 
-      const hasLayoutChanges =
-        !result.noChanges && result.originalContent && result.newContent;
-      const hasPackageJsonChanges =
-        packageJsonResult.success &&
-        !packageJsonResult.noChanges &&
-        packageJsonResult.originalContent &&
-        packageJsonResult.newContent;
+      const hasLayoutChanges = !result.noChanges && result.originalContent && result.newContent;
 
-      if (hasLayoutChanges || hasPackageJsonChanges) {
+      if (hasLayoutChanges) {
         logger.break();
 
-        if (hasLayoutChanges) {
-          printDiff(
-            result.filePath,
-            result.originalContent!,
-            result.newContent!,
-          );
-        }
-
-        if (hasPackageJsonChanges) {
-          if (hasLayoutChanges) {
-            logger.break();
-          }
-          printDiff(
-            packageJsonResult.filePath,
-            packageJsonResult.originalContent!,
-            packageJsonResult.newContent!,
-          );
-        }
+        printDiff(result.filePath, result.originalContent!, result.newContent!);
 
         logger.break();
         logger.warn("Auto-detection may not be 100% accurate.");
@@ -1078,21 +524,11 @@ export const init = new Command()
         }
       }
 
-      if (agentsToRemove.length > 0) {
-        await removeAgents(agentsToRemove, opts.skipInstall);
-        projectInfo.installedAgents = projectInfo.installedAgents.filter(
-          (agent) => !agentsToRemove.includes(agent),
-        );
-      }
-
       const shouldInstallReactGrab = !projectInfo.hasReactGrab;
-      const shouldInstallAgent =
-        agentIntegration !== "none" &&
-        !projectInfo.installedAgents.includes(agentIntegration);
 
-      if (!opts.skipInstall && (shouldInstallReactGrab || shouldInstallAgent)) {
+      if (!opts.skipInstall && shouldInstallReactGrab) {
         installPackagesWithFeedback(
-          getPackagesToInstall(agentIntegration, shouldInstallReactGrab),
+          getPackagesToInstall(shouldInstallReactGrab),
           finalPackageManager,
           projectInfo.projectRoot,
         );
@@ -1102,28 +538,16 @@ export const init = new Command()
         applyTransformWithFeedback(result);
       }
 
-      if (hasPackageJsonChanges) {
-        applyPackageJsonWithFeedback(packageJsonResult);
-      }
-
       logger.break();
-      logger.log(
-        `${highlighter.success("Success!")} React Grab has been installed.`,
-      );
-      if (packageJsonResult.warning) {
-        logger.break();
-        logger.warn(packageJsonResult.warning);
-        logger.break();
-      } else {
-        logger.log("You may now start your development server.");
-      }
+      logger.log(`${highlighter.success("Success!")} React Grab has been installed.`);
+      logger.log("You may now start your development server.");
       logger.break();
 
       reportToCli("completed", {
         framework: finalFramework,
         packageManager: finalPackageManager,
         router: finalNextRouterType,
-        agent: agentIntegration !== "none" ? agentIntegration : undefined,
+        agent: didInstallMcp ? "mcp" : undefined,
         isMonorepo: projectInfo.isMonorepo,
       });
     } catch (error) {

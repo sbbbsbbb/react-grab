@@ -15,9 +15,6 @@ export const DEFAULT_THEME: Required<Theme> = {
   elementLabel: {
     enabled: true,
   },
-  crosshair: {
-    enabled: true,
-  },
   toolbar: {
     enabled: true,
   },
@@ -30,22 +27,16 @@ export const deepMergeTheme = (
   enabled: partialTheme.enabled ?? baseTheme.enabled,
   hue: partialTheme.hue ?? baseTheme.hue,
   selectionBox: {
-    enabled:
-      partialTheme.selectionBox?.enabled ?? baseTheme.selectionBox.enabled,
+    enabled: partialTheme.selectionBox?.enabled ?? baseTheme.selectionBox.enabled,
   },
   dragBox: {
     enabled: partialTheme.dragBox?.enabled ?? baseTheme.dragBox.enabled,
   },
   grabbedBoxes: {
-    enabled:
-      partialTheme.grabbedBoxes?.enabled ?? baseTheme.grabbedBoxes.enabled,
+    enabled: partialTheme.grabbedBoxes?.enabled ?? baseTheme.grabbedBoxes.enabled,
   },
   elementLabel: {
-    enabled:
-      partialTheme.elementLabel?.enabled ?? baseTheme.elementLabel.enabled,
-  },
-  crosshair: {
-    enabled: partialTheme.crosshair?.enabled ?? baseTheme.crosshair.enabled,
+    enabled: partialTheme.elementLabel?.enabled ?? baseTheme.elementLabel.enabled,
   },
   toolbar: {
     enabled: partialTheme.toolbar?.enabled ?? baseTheme.toolbar.enabled,

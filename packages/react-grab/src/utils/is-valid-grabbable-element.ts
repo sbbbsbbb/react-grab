@@ -6,23 +6,23 @@ import {
   VISIBILITY_CACHE_TTL_MS,
 } from "../constants.js";
 import { isElementVisible } from "./is-element-visible.js";
+import { isRootElement } from "./is-root-element.js";
 
 const isReactGrabElement = (element: Element): boolean => {
   if (element.hasAttribute("data-react-grab")) return true;
 
   const rootNode = element.getRootNode();
-  return (
-    rootNode instanceof ShadowRoot &&
-    rootNode.host.hasAttribute("data-react-grab")
-  );
+  return rootNode instanceof ShadowRoot && rootNode.host.hasAttribute("data-react-grab");
 };
 
 const isUserIgnoredElement = (element: Element): boolean =>
   element.hasAttribute(USER_IGNORE_ATTRIBUTE) ||
   element.closest(`[${USER_IGNORE_ATTRIBUTE}]`) !== null;
 
-// HACK: Dev tools like react-scan create full-viewport canvas overlays with
-// pointer-events: none that document.elementsFromPoint() still returns.
+// Dev tools like react-scan create full-viewport canvas overlays with
+// pointer-events:none that elementsFromPoint still returns. Without this
+// filter the user would select the invisible overlay instead of the actual
+// page content beneath it.
 // @see https://github.com/aidenybai/react-grab/issues/148
 const isDevToolsOverlay = (computedStyle: CSSStyleDeclaration): boolean => {
   const zIndex = parseInt(computedStyle.zIndex, 10);
@@ -34,10 +34,7 @@ const isDevToolsOverlay = (computedStyle: CSSStyleDeclaration): boolean => {
   );
 };
 
-const isFullViewportOverlay = (
-  element: Element,
-  computedStyle: CSSStyleDeclaration,
-): boolean => {
+const isFullViewportOverlay = (element: Element, computedStyle: CSSStyleDeclaration): boolean => {
   const position = computedStyle.position;
   if (position !== "fixed" && position !== "absolute") {
     return false;
@@ -78,6 +75,10 @@ export const clearVisibilityCache = (): void => {
 };
 
 export const isValidGrabbableElement = (element: Element): boolean => {
+  if (isRootElement(element)) {
+    return false;
+  }
+
   if (isReactGrabElement(element)) {
     return false;
   }
@@ -95,17 +96,26 @@ export const isValidGrabbableElement = (element: Element): boolean => {
 
   const computedStyle = window.getComputedStyle(element);
 
-  if (isDevToolsOverlay(computedStyle)) {
-    return false;
-  }
-
-  if (isFullViewportOverlay(element, computedStyle)) {
-    return false;
-  }
-
   const isVisible = isElementVisible(element, computedStyle);
+  if (!isVisible) {
+    visibilityCache.set(element, { isVisible: false, timestamp: now });
+    return false;
+  }
 
-  visibilityCache.set(element, { isVisible, timestamp: now });
+  const couldBeOverlay =
+    element.clientWidth / window.innerWidth >= VIEWPORT_COVERAGE_THRESHOLD &&
+    element.clientHeight / window.innerHeight >= VIEWPORT_COVERAGE_THRESHOLD;
 
-  return isVisible;
+  if (couldBeOverlay) {
+    if (isDevToolsOverlay(computedStyle)) {
+      return false;
+    }
+    if (isFullViewportOverlay(element, computedStyle)) {
+      return false;
+    }
+  }
+
+  visibilityCache.set(element, { isVisible: true, timestamp: now });
+
+  return true;
 };

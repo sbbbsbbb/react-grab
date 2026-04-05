@@ -19,9 +19,7 @@ test.describe("Element Selection", () => {
     expect(hasSelectionContent).toBe(true);
   });
 
-  test("should copy element content to clipboard on click", async ({
-    reactGrab,
-  }) => {
+  test("should copy element content to clipboard on click", async ({ reactGrab }) => {
     await reactGrab.activate();
     await reactGrab.hoverElement("li");
     await reactGrab.waitForSelectionBox();
@@ -39,14 +37,29 @@ test.describe("Element Selection", () => {
     await reactGrab.waitForSelectionBox();
 
     await reactGrab.clickElement("[data-testid='todo-list'] h1");
-    await expect
-      .poll(() => reactGrab.getClipboardContent())
-      .toContain("Todo List");
+    await expect.poll(() => reactGrab.getClipboardContent()).toContain("Todo List");
   });
 
-  test("should highlight different elements when hovering", async ({
-    reactGrab,
-  }) => {
+  test("should write React Grab clipboard metadata on copy", async ({ reactGrab }) => {
+    await reactGrab.activate();
+    await reactGrab.hoverElement("[data-testid='todo-list'] h1");
+    await reactGrab.waitForSelectionBox();
+
+    const copyPayloadPromise = reactGrab.captureNextClipboardWrites();
+    await reactGrab.clickElement("[data-testid='todo-list'] h1");
+    const copyPayload = await copyPayloadPromise;
+    const clipboardMetadataText = copyPayload["application/x-react-grab"];
+    if (!clipboardMetadataText) {
+      throw new Error("Missing React Grab clipboard metadata");
+    }
+
+    const clipboardMetadata = JSON.parse(clipboardMetadataText);
+    expect(clipboardMetadata.content).toContain("Todo List");
+    expect(clipboardMetadata.entries).toHaveLength(1);
+    expect(clipboardMetadata.entries[0].content).toContain("Todo List");
+  });
+
+  test("should highlight different elements when hovering", async ({ reactGrab }) => {
     await reactGrab.activate();
 
     await reactGrab.hoverElement("h1");
@@ -62,16 +75,12 @@ test.describe("Element Selection", () => {
     expect(isVisible).toBe(true);
   });
 
-  test("should deactivate after successful copy in toggle mode", async ({
-    reactGrab,
-  }) => {
+  test("should deactivate after successful copy in toggle mode", async ({ reactGrab }) => {
     await reactGrab.activate();
     await reactGrab.hoverElement("li");
     await reactGrab.clickElement("li");
 
-    await expect
-      .poll(() => reactGrab.isOverlayVisible(), { timeout: 3000 })
-      .toBe(false);
+    await expect.poll(() => reactGrab.isOverlayVisible(), { timeout: 3000 }).toBe(false);
   });
 
   test("should not show selection when inactive", async ({ reactGrab }) => {
@@ -94,25 +103,17 @@ test.describe("Element Selection", () => {
     await expect.poll(() => reactGrab.getClipboardContent()).toBeTruthy();
   });
 
-  test("should maintain selection target while hovering", async ({
-    reactGrab,
-  }) => {
+  test("should maintain selection target while hovering", async ({ reactGrab }) => {
     await reactGrab.activate();
 
     const listItem = reactGrab.page.locator("li").first();
     const box = await listItem.boundingBox();
     if (!box) throw new Error("Could not get bounding box");
 
-    await reactGrab.page.mouse.move(
-      box.x + box.width / 2,
-      box.y + box.height / 2,
-    );
+    await reactGrab.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await reactGrab.waitForSelectionBox();
 
-    await reactGrab.page.mouse.move(
-      box.x + box.width / 2 + 5,
-      box.y + box.height / 2 + 5,
-    );
+    await reactGrab.page.mouse.move(box.x + box.width / 2 + 5, box.y + box.height / 2 + 5);
     await reactGrab.waitForSelectionBox();
 
     const isVisible = await reactGrab.isOverlayVisible();
@@ -121,9 +122,7 @@ test.describe("Element Selection", () => {
 });
 
 test.describe("Selection Bounds and Mutations", () => {
-  test("selection box should update when element size changes", async ({
-    reactGrab,
-  }) => {
+  test("selection box should update when element size changes", async ({ reactGrab }) => {
     await reactGrab.activate();
     await reactGrab.hoverElement("li:first-child");
     await reactGrab.waitForSelectionBox();
@@ -146,9 +145,7 @@ test.describe("Selection Bounds and Mutations", () => {
       .toBeGreaterThan(initialBounds?.height ?? 0);
   });
 
-  test("selection should handle element being hidden", async ({
-    reactGrab,
-  }) => {
+  test("selection should handle element being hidden", async ({ reactGrab }) => {
     await reactGrab.activate();
     await reactGrab.hoverElement("[data-testid='toggleable-element']");
     await reactGrab.waitForSelectionBox();
@@ -181,9 +178,7 @@ test.describe("Selection Bounds and Mutations", () => {
     }
   });
 
-  test("multiple selection boxes should display for drag selection", async ({
-    reactGrab,
-  }) => {
+  test("multiple selection boxes should display for drag selection", async ({ reactGrab }) => {
     await reactGrab.activate();
     await reactGrab.dragSelect("li:first-child", "li:nth-child(3)");
     await reactGrab.page.waitForTimeout(500);
@@ -196,17 +191,13 @@ test.describe("Selection Bounds and Mutations", () => {
       .toBeGreaterThan(1);
   });
 
-  test("selection should work on deeply nested elements", async ({
-    reactGrab,
-  }) => {
+  test("selection should work on deeply nested elements", async ({ reactGrab }) => {
     await reactGrab.activate();
     await reactGrab.hoverElement("[data-testid='deeply-nested-text']");
     await reactGrab.waitForSelectionBox();
 
     await reactGrab.clickElement("[data-testid='deeply-nested-text']");
 
-    await expect
-      .poll(() => reactGrab.getClipboardContent())
-      .toContain("deeply nested");
+    await expect.poll(() => reactGrab.getClipboardContent()).toContain("deeply nested");
   });
 });
