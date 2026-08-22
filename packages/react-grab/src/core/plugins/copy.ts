@@ -7,6 +7,7 @@ export const copyPlugin: Plugin = {
       id: "copy",
       label: "Copy",
       shortcut: "C",
+      showInToolbarMenu: true,
       onAction: (context) => {
         context.copy?.();
       },

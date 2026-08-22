@@ -9,12 +9,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - run: corepack enable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: "pnpm"
 
       - name: Install dependencies
@@ -23,18 +23,24 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - run: |
-          pnpm dlx pkg-pr-new publish \
-            ./packages/react-grab \
-            ./packages/cli \
-            ./packages/grab \
-            ./packages/relay \
-            ./packages/utils \
-            ./packages/provider-ami \
-            ./packages/provider-amp \
-            ./packages/provider-claude-code \
-            ./packages/provider-codex \
-            ./packages/provider-cursor \
-            ./packages/provider-droid \
-            ./packages/provider-gemini \
-            ./packages/provider-opencode
+      - name: Publish packages (retry on transient failures)
+        run: |
+          max_attempts=4
+          attempt=1
+          while [ "$attempt" -le "$max_attempts" ]; do
+            if pnpm dlx pkg-pr-new publish \
+              ./packages/react-grab \
+              ./packages/cli \
+              ./packages/grab; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              exit 1
+            fi
+
+            sleep_seconds=$((2 ** attempt))
+            echo "pkg-pr-new publish failed on attempt ${attempt}/${max_attempts}; retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+            attempt=$((attempt + 1))
+          done

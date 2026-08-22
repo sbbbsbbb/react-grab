@@ -1,17 +1,11 @@
 import { VERSION } from "../constants.js";
+import type { ReactGrabEntry } from "../types.js";
+import { escapeHtmlText } from "./escape-html-text.js";
+import { IS_DEMO } from "./runtime-mode.js";
 
-const LEXICAL_EDITOR_MIME_TYPE = "application/x-lexical-editor";
 const REACT_GRAB_MIME_TYPE = "application/x-react-grab";
 
-export interface ReactGrabEntry {
-  tagName?: string;
-  componentName?: string;
-  content: string;
-  commentText?: string;
-}
-
 interface CopyContentOptions {
-  onSuccess?: () => void;
   componentName?: string;
   tagName?: string;
   commentText?: string;
@@ -25,132 +19,13 @@ interface ReactGrabMetadata {
   timestamp: number;
 }
 
-interface LexicalNode {
-  detail: number;
-  format: number;
-  mode: string;
-  style: string;
-  text: string;
-  type: string;
-  version: number;
-  mentionName?: string;
-  typeaheadType?: Record<string, unknown>;
-  storedKey?: string;
-  metadata?: Record<string, unknown>;
-  source?: string;
-}
+export const copyContent = (content: string, options?: CopyContentOptions): boolean => {
+  // Demo mode never touches the visitor's real clipboard (and synthetic events
+  // lack the user gesture execCommand needs), so report success to play the
+  // "Copied" feedback without writing.
+  if (IS_DEMO) return true;
 
-const generateUuid = (): string =>
-  "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
-    const randomNibble = (Math.random() * 16) | 0;
-    const hexValue =
-      character === "x" ? randomNibble : (randomNibble & 0x3) | 0x8;
-    return hexValue.toString(16);
-  });
-
-const createMentionNode = (
-  displayName: string,
-  mentionKey: string,
-  typeaheadType: Record<string, unknown>,
-  metadata: Record<string, unknown>,
-): LexicalNode => ({
-  detail: 1,
-  format: 0,
-  mode: "segmented",
-  style: "",
-  text: `@${displayName}`,
-  type: "mention",
-  version: 1,
-  mentionName: displayName,
-  typeaheadType,
-  storedKey: mentionKey,
-  metadata,
-  source: "chat",
-});
-
-const createTextNode = (text: string): LexicalNode => ({
-  detail: 0,
-  format: 0,
-  mode: "normal",
-  style: "",
-  text,
-  type: "text",
-  version: 1,
-});
-
-const escapeHtml = (text: string): string =>
-  text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
-interface ClipboardData {
-  plainText: string;
-  htmlContent: string;
-  lexicalData: string;
-}
-
-// HACK: Cursor's Lexical editor only reads content from registered commands/files,
-// not from embedded clipboard data. We include the content after the mention chip
-// so Cursor can actually read it.
-const createClipboardData = (
-  content: string,
-  elementName: string,
-): ClipboardData => {
-  const mentionKey = String(Math.floor(Math.random() * 10000));
-  const namespaceUuid = generateUuid();
-  const displayName = `<${elementName}>`;
-
-  const typeaheadType = {
-    case: "file",
-    path: `${displayName}.tsx`,
-    content,
-  };
-
-  const selectedOption = {
-    key: displayName,
-    type: typeaheadType,
-    payload: { file: { path: `${displayName}.tsx`, content } },
-    id: generateUuid(),
-    name: displayName,
-    _score: 20,
-    isSlash: false,
-    labelMatch: [{ start: 0, end: 2 }],
-  };
-
-  const mentionMetadata = {
-    selection: { type: 0 },
-    selectedOption,
-  };
-
-  return {
-    plainText: `@${displayName}\n\n${content}\n`,
-    htmlContent: `<meta charset='utf-8'><pre><code>${escapeHtml(content)}</code></pre>`,
-    lexicalData: JSON.stringify({
-      namespace: `chat-input${namespaceUuid}-pane`,
-      nodes: [
-        createMentionNode(
-          displayName,
-          mentionKey,
-          typeaheadType,
-          mentionMetadata,
-        ),
-        createTextNode(`\n\n${content}`),
-      ],
-    }),
-  };
-};
-
-export const copyContent = (
-  content: string,
-  options?: CopyContentOptions,
-): boolean => {
   const elementName = options?.componentName ?? "div";
-  const { plainText, htmlContent, lexicalData } = createClipboardData(
-    content,
-    elementName,
-  );
   const entries = options?.entries ?? [
     {
       tagName: options?.tagName,
@@ -166,33 +41,39 @@ export const copyContent = (
     timestamp: Date.now(),
   };
 
+  // The clipboard receives three formats: plain text for terminals and editors,
+  // HTML-escaped content for rich text fields like Notion or Google Docs, and a
+  // custom MIME type carrying full metadata for paste targets that understand it.
   const copyHandler = (event: ClipboardEvent) => {
     event.preventDefault();
-    event.clipboardData?.setData("text/plain", plainText);
-    event.clipboardData?.setData("text/html", htmlContent);
-    event.clipboardData?.setData(LEXICAL_EDITOR_MIME_TYPE, lexicalData);
+    event.clipboardData?.setData("text/plain", content);
     event.clipboardData?.setData(
-      REACT_GRAB_MIME_TYPE,
-      JSON.stringify(reactGrabMetadata),
+      "text/html",
+      `<meta charset='utf-8'><pre><code>${escapeHtmlText(content)}</code></pre>`,
     );
+    event.clipboardData?.setData(REACT_GRAB_MIME_TYPE, JSON.stringify(reactGrabMetadata));
   };
 
+  // We use the deprecated but universally supported execCommand("copy") because
+  // it runs synchronously in the user's key event call stack, unlike the async
+  // Clipboard API. The hidden textarea provides the selection context that
+  // execCommand requires, and the copy handler installed above intercepts the
+  // browser's default behavior to set our custom clipboard data.
+  const textarea = document.createElement("textarea");
   document.addEventListener("copy", copyHandler);
 
-  const textarea = document.createElement("textarea");
-  textarea.value = content;
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.ariaHidden = "true";
-  document.body.appendChild(textarea);
-  textarea.select();
-
   try {
-    const didCopySucceed = document.execCommand("copy");
-    if (didCopySucceed) {
-      options?.onSuccess?.();
+    textarea.value = content;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.ariaHidden = "true";
+    document.body.appendChild(textarea);
+    textarea.select();
+
+    if (typeof document.execCommand !== "function") {
+      return false;
     }
-    return didCopySucceed;
+    return document.execCommand("copy");
   } finally {
     document.removeEventListener("copy", copyHandler);
     textarea.remove();

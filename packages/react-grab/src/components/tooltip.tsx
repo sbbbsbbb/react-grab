@@ -1,22 +1,18 @@
 import { createSignal, createEffect, on, onCleanup, Show } from "solid-js";
-import type { Component, JSX } from "solid-js";
+import type { Component } from "solid-js";
 import { cn } from "../utils/cn.js";
-import {
-  TOOLTIP_DELAY_MS,
-  TOOLTIP_GRACE_PERIOD_MS,
-  PANEL_STYLES,
-} from "../constants.js";
+import { TOOLTIP_DELAY_MS, TOOLTIP_GRACE_PERIOD_MS, Z_INDEX_OVERLAY } from "../constants.js";
 
-let tooltipCloseTimestamp = 0;
+let lastCloseTimestamp = 0;
 
 const wasTooltipRecentlyVisible = () => {
-  return Date.now() - tooltipCloseTimestamp < TOOLTIP_GRACE_PERIOD_MS;
+  return Date.now() - lastCloseTimestamp < TOOLTIP_GRACE_PERIOD_MS;
 };
 
 interface TooltipProps {
   visible: boolean;
   position: "top" | "bottom" | "left" | "right";
-  children: JSX.Element;
+  textContent: string;
 }
 
 export const Tooltip: Component<TooltipProps> = (props) => {
@@ -34,6 +30,8 @@ export const Tooltip: Component<TooltipProps> = (props) => {
         }
 
         if (isVisible) {
+          // Reopening within the grace period skips the delay and the fade so
+          // moving between adjacent buttons reads as one continuous tooltip.
           if (wasTooltipRecentlyVisible()) {
             setShouldAnimate(false);
             setDelayedVisible(true);
@@ -45,7 +43,7 @@ export const Tooltip: Component<TooltipProps> = (props) => {
           }
         } else {
           if (delayedVisible()) {
-            tooltipCloseTimestamp = Date.now();
+            lastCloseTimestamp = Date.now();
           }
           setDelayedVisible(false);
         }
@@ -58,29 +56,33 @@ export const Tooltip: Component<TooltipProps> = (props) => {
       clearTimeout(delayTimeoutId);
     }
     if (delayedVisible()) {
-      tooltipCloseTimestamp = Date.now();
+      lastCloseTimestamp = Date.now();
     }
   });
+
+  const positionStyle = (): Record<string, string> => {
+    const isHorizontal = props.position === "top" || props.position === "bottom";
+    if (isHorizontal) {
+      return { left: "50%", translate: "-50%", "z-index": `${Z_INDEX_OVERLAY}` };
+    }
+    return { top: "50%", translate: "0 -50%", "z-index": `${Z_INDEX_OVERLAY}` };
+  };
 
   return (
     <Show when={delayedVisible()}>
       <div
         class={cn(
-          "absolute whitespace-nowrap px-1.5 py-0.5 rounded-[10px] text-[10px] text-black/60 pointer-events-none [corner-shape:superellipse(1.25)]",
-          PANEL_STYLES,
-          props.position === "left" || props.position === "right"
-            ? "top-1/2 -translate-y-1/2"
-            : "left-1/2 -translate-x-1/2",
+          "absolute whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-sans font-medium leading-4 pointer-events-none",
+          "bg-[var(--rg-panel-bg)] text-[var(--rg-text-primary)] [box-shadow:var(--rg-shadow)]",
           props.position === "top" && "bottom-full mb-2.5",
           props.position === "bottom" && "top-full mt-2.5",
           props.position === "left" && "right-full mr-2.5",
           props.position === "right" && "left-full ml-2.5",
           shouldAnimate() && "animate-tooltip-fade-in",
         )}
-        style={{ "z-index": "2147483647" }}
-      >
-        {props.children}
-      </div>
+        style={positionStyle()}
+        textContent={props.textContent}
+      />
     </Show>
   );
 };

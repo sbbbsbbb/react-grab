@@ -1,66 +1,85 @@
-import { describe, expect, it } from "vitest";
-import {
-  getPackagesToInstall,
-  getPackagesToUninstall,
-} from "../src/utils/install.js";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("tinyexec", () => ({
+  x: vi.fn(),
+}));
+
+vi.mock("../src/utils/should-use-corepack.js", () => ({
+  shouldUseCorepack: vi.fn(),
+}));
+
+import { x } from "tinyexec";
+import { getPackagesToInstall, installPackages } from "../src/utils/install.js";
+import { shouldUseCorepack } from "../src/utils/should-use-corepack.js";
+
+const mockExecute = vi.mocked(x);
+const mockShouldUseCorepack = vi.mocked(shouldUseCorepack);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockShouldUseCorepack.mockResolvedValue(false);
+});
+
+describe("installPackages", () => {
+  it("runs a pinned pnpm version through Corepack", async () => {
+    mockShouldUseCorepack.mockResolvedValue(true);
+    mockExecute.mockResolvedValue({
+      exitCode: 0,
+      stderr: "",
+      stdout: "",
+    });
+
+    await installPackages(["react-grab"], {
+      cwd: "/app",
+      packageManager: "pnpm",
+      silent: true,
+    });
+
+    expect(mockExecute).toHaveBeenCalledWith(
+      "corepack",
+      ["pnpm", "add", "-D", "--prod=false", "react-grab"],
+      {
+        nodeOptions: {
+          stdio: "ignore",
+          cwd: "/app",
+          env: { ...process.env, REACT_GRAB_INIT: "1" },
+        },
+        throwOnError: true,
+      },
+    );
+  });
+
+  it("falls back to the package manager executable", async () => {
+    mockExecute.mockResolvedValue({
+      exitCode: 0,
+      stderr: "",
+      stdout: "",
+    });
+
+    await installPackages(["react-grab"], {
+      cwd: "/app",
+      packageManager: "pnpm",
+      silent: true,
+    });
+
+    expect(mockExecute).toHaveBeenCalledWith(
+      "pnpm",
+      ["add", "-D", "--prod=false", "react-grab"],
+      expect.any(Object),
+    );
+  });
+});
 
 describe("getPackagesToInstall", () => {
-  it("should return only react-grab when no agent and includeReactGrab is true", () => {
-    const packages = getPackagesToInstall("none", true);
+  it("should return react-grab when includeReactGrab is true", () => {
+    const packages = getPackagesToInstall(true);
 
     expect(packages).toEqual(["react-grab"]);
   });
 
-  it("should return react-grab and agent package", () => {
-    const packages = getPackagesToInstall("cursor", true);
-
-    expect(packages).toEqual(["react-grab", "@react-grab/cursor"]);
-  });
-
-  it("should return only agent package when includeReactGrab is false", () => {
-    const packages = getPackagesToInstall("claude-code", false);
-
-    expect(packages).toEqual(["@react-grab/claude-code"]);
-  });
-
-  it("should return empty array when no agent and includeReactGrab is false", () => {
-    const packages = getPackagesToInstall("none", false);
+  it("should return empty array when includeReactGrab is false", () => {
+    const packages = getPackagesToInstall(false);
 
     expect(packages).toEqual([]);
-  });
-
-  it("should handle all agent types", () => {
-    const agents = ["claude-code", "cursor", "opencode"] as const;
-
-    for (const agent of agents) {
-      const packages = getPackagesToInstall(agent, false);
-      expect(packages).toEqual([`@react-grab/${agent}`]);
-    }
-  });
-
-  it("should return @react-grab/mcp when agent is mcp", () => {
-    const packages = getPackagesToInstall("mcp", false);
-
-    expect(packages).toEqual(["@react-grab/mcp"]);
-  });
-
-  it("should return react-grab and @react-grab/mcp when agent is mcp and includeReactGrab is true", () => {
-    const packages = getPackagesToInstall("mcp", true);
-
-    expect(packages).toEqual(["react-grab", "@react-grab/mcp"]);
-  });
-});
-
-describe("getPackagesToUninstall", () => {
-  it("should return @react-grab/mcp for mcp agent", () => {
-    const packages = getPackagesToUninstall("mcp");
-
-    expect(packages).toEqual(["@react-grab/mcp"]);
-  });
-
-  it("should return legacy agent package", () => {
-    const packages = getPackagesToUninstall("cursor");
-
-    expect(packages).toEqual(["@react-grab/cursor"]);
   });
 });

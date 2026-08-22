@@ -1,21 +1,27 @@
+import { accessSync, constants, existsSync, readFileSync, writeFileSync } from "node:fs";
+import type { Framework, NextRouterType } from "./detect.js";
 import {
-  accessSync,
-  constants,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
-import type { Framework, NextRouterType, PackageManager } from "./detect.js";
-import {
-  NEXT_APP_ROUTER_SCRIPT_WITH_AGENT,
-  NEXT_PAGES_ROUTER_SCRIPT_WITH_AGENT,
+  NEXT_APP_ROUTER_SCRIPT,
   SCRIPT_IMPORT,
-  TANSTACK_EFFECT_WITH_AGENT,
-  VITE_SCRIPT_WITH_AGENT,
-  WEBPACK_IMPORT_WITH_AGENT,
-  type AgentIntegration,
+  TANSTACK_EFFECT,
+  VITE_IMPORT,
+  WEBPACK_IMPORT,
 } from "./templates.js";
+import { hasReactGrabSetupCode } from "./react-grab-code.js";
+import {
+  findDocumentFile,
+  findEntryFile,
+  findIndexHtml,
+  findLayoutFile,
+  findTanStackRootFile,
+  getDocumentFileCandidates,
+  getEntryFileCandidates,
+  getIndexHtmlCandidates,
+  getInstrumentationFileCandidates,
+  getLayoutFileCandidates,
+  getTanStackRootFileCandidates,
+  isInstrumentationFile,
+} from "./react-grab-setup-files.js";
 
 export interface TransformResult {
   success: boolean;
@@ -34,375 +40,27 @@ export interface ReactGrabOptions {
   maxContextLines?: number;
 }
 
-export interface PackageJsonTransformResult {
-  success: boolean;
-  filePath: string;
-  message: string;
-  originalContent?: string;
-  newContent?: string;
-  noChanges?: boolean;
-  warning?: string;
-}
-
-const hasReactGrabCode = (content: string): boolean => {
-  const fuzzyPatterns = [
-    /["'`][^"'`]*react-grab/,
-    /react-grab[^"'`]*["'`]/,
-    /<[^>]*react-grab/i,
-    /import[^;]*react-grab/i,
-    /require[^)]*react-grab/i,
-    /from\s+[^;]*react-grab/i,
-    /src[^>]*react-grab/i,
-    /href[^>]*react-grab/i,
-  ];
-  return fuzzyPatterns.some((pattern) => pattern.test(content));
-};
-
-const findLayoutFile = (projectRoot: string): string | null => {
-  const possiblePaths = [
-    join(projectRoot, "app", "layout.tsx"),
-    join(projectRoot, "app", "layout.jsx"),
-    join(projectRoot, "src", "app", "layout.tsx"),
-    join(projectRoot, "src", "app", "layout.jsx"),
-  ];
-
-  for (const filePath of possiblePaths) {
-    if (existsSync(filePath)) {
-      return filePath;
-    }
-  }
-
-  return null;
-};
-
-const findInstrumentationFile = (projectRoot: string): string | null => {
-  const possiblePaths = [
-    join(projectRoot, "instrumentation-client.ts"),
-    join(projectRoot, "instrumentation-client.js"),
-    join(projectRoot, "src", "instrumentation-client.ts"),
-    join(projectRoot, "src", "instrumentation-client.js"),
-  ];
-
-  for (const filePath of possiblePaths) {
-    if (existsSync(filePath)) {
-      return filePath;
-    }
-  }
-
-  return null;
-};
-
 const hasReactGrabInInstrumentation = (projectRoot: string): boolean => {
-  const instrumentationPath = findInstrumentationFile(projectRoot);
-  if (!instrumentationPath) return false;
-
-  const content = readFileSync(instrumentationPath, "utf-8");
-  return hasReactGrabCode(content);
+  return findFileWithReactGrabSetup(getInstrumentationFileCandidates(projectRoot)) !== null;
 };
 
-const findDocumentFile = (projectRoot: string): string | null => {
-  const possiblePaths = [
-    join(projectRoot, "pages", "_document.tsx"),
-    join(projectRoot, "pages", "_document.jsx"),
-    join(projectRoot, "src", "pages", "_document.tsx"),
-    join(projectRoot, "src", "pages", "_document.jsx"),
-  ];
-
-  for (const filePath of possiblePaths) {
-    if (existsSync(filePath)) {
-      return filePath;
-    }
+const findFileWithReactGrabSetup = (fileCandidates: string[]): string | null => {
+  for (const filePath of fileCandidates) {
+    if (!existsSync(filePath)) continue;
+    if (hasReactGrabSetupCode(readFileSync(filePath, "utf-8"))) return filePath;
   }
-
   return null;
 };
 
-const findIndexHtml = (projectRoot: string): string | null => {
-  const possiblePaths = [
-    join(projectRoot, "index.html"),
-    join(projectRoot, "public", "index.html"),
-  ];
-
-  for (const filePath of possiblePaths) {
-    if (existsSync(filePath)) {
-      return filePath;
-    }
-  }
-
-  return null;
-};
-
-const findEntryFile = (projectRoot: string): string | null => {
-  const possiblePaths = [
-    join(projectRoot, "src", "index.tsx"),
-    join(projectRoot, "src", "index.jsx"),
-    join(projectRoot, "src", "index.ts"),
-    join(projectRoot, "src", "index.js"),
-    join(projectRoot, "src", "main.tsx"),
-    join(projectRoot, "src", "main.jsx"),
-    join(projectRoot, "src", "main.ts"),
-    join(projectRoot, "src", "main.js"),
-  ];
-
-  for (const filePath of possiblePaths) {
-    if (existsSync(filePath)) {
-      return filePath;
-    }
-  }
-
-  return null;
-};
-
-const findTanStackRootFile = (projectRoot: string): string | null => {
-  const possiblePaths = [
-    join(projectRoot, "src", "routes", "__root.tsx"),
-    join(projectRoot, "src", "routes", "__root.jsx"),
-    join(projectRoot, "app", "routes", "__root.tsx"),
-    join(projectRoot, "app", "routes", "__root.jsx"),
-  ];
-
-  for (const filePath of possiblePaths) {
-    if (existsSync(filePath)) {
-      return filePath;
-    }
-  }
-
-  return null;
-};
-
-const addAgentToExistingNextApp = (
-  originalContent: string,
-  agent: AgentIntegration,
-  filePath: string,
-): TransformResult => {
-  if (agent === "none") {
-    return {
-      success: true,
-      filePath,
-      message: "React Grab is already configured",
-      noChanges: true,
-    };
-  }
-
-  const agentPackage = `@react-grab/${agent}`;
-  if (originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is already configured`,
-      noChanges: true,
-    };
-  }
-
-  const agentScript = `{process.env.NODE_ENV === "development" && (
-          <Script
-            src="//unpkg.com/${agentPackage}/dist/client.global.js"
-            strategy="lazyOnload"
-          />
-        )}`;
-
-  const reactGrabBlockMatch = originalContent.match(
-    /\{process\.env\.NODE_ENV\s*===\s*["']development["']\s*&&\s*\(\s*<Script[^>]*react-grab[^>]*\/>\s*\)\}/is,
-  );
-
-  if (reactGrabBlockMatch) {
-    const newContent = originalContent.replace(
-      reactGrabBlockMatch[0],
-      `${reactGrabBlockMatch[0]}\n        ${agentScript}`,
-    );
-    return {
-      success: true,
-      filePath,
-      message: `Add ${agent} agent`,
-      originalContent,
-      newContent,
-    };
-  }
-
-  const bareScriptMatch = originalContent.match(
-    /<Script[^>]*react-grab[^>]*\/>/i,
-  );
-
-  if (bareScriptMatch) {
-    const newContent = originalContent.replace(
-      bareScriptMatch[0],
-      `${bareScriptMatch[0]}\n        <Script src="//unpkg.com/${agentPackage}/dist/client.global.js" strategy="lazyOnload" />`,
-    );
-    return {
-      success: true,
-      filePath,
-      message: `Add ${agent} agent`,
-      originalContent,
-      newContent,
-    };
-  }
-
-  return {
-    success: false,
-    filePath,
-    message: "Could not find React Grab script to add agent after",
-  };
-};
-
-const addAgentToExistingVite = (
-  originalContent: string,
-  agent: AgentIntegration,
-  filePath: string,
-): TransformResult => {
-  if (agent === "none") {
-    return {
-      success: true,
-      filePath,
-      message: "React Grab is already configured",
-      noChanges: true,
-    };
-  }
-
-  const agentPackage = `@react-grab/${agent}`;
-  if (originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is already configured`,
-      noChanges: true,
-    };
-  }
-
-  const agentImport = `import("${agentPackage}/client");`;
-  const reactGrabImportMatch = originalContent.match(
-    /import\s*\(\s*["']react-grab["']\s*\);?/,
-  );
-
-  if (reactGrabImportMatch) {
-    const matchedText = reactGrabImportMatch[0];
-    const hasSemicolon = matchedText.endsWith(";");
-    const newContent = originalContent.replace(
-      matchedText,
-      `${hasSemicolon ? matchedText.slice(0, -1) : matchedText};\n        ${agentImport}`,
-    );
-    return {
-      success: true,
-      filePath,
-      message: `Add ${agent} agent`,
-      originalContent,
-      newContent,
-    };
-  }
-
-  return {
-    success: false,
-    filePath,
-    message: "Could not find React Grab import to add agent after",
-  };
-};
-
-const addAgentToExistingWebpack = (
-  originalContent: string,
-  agent: AgentIntegration,
-  filePath: string,
-): TransformResult => {
-  if (agent === "none") {
-    return {
-      success: true,
-      filePath,
-      message: "React Grab is already configured",
-      noChanges: true,
-    };
-  }
-
-  const agentPackage = `@react-grab/${agent}`;
-  if (originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is already configured`,
-      noChanges: true,
-    };
-  }
-
-  const agentImport = `import("${agentPackage}/client");`;
-  const reactGrabImportMatch = originalContent.match(
-    /import\s*\(\s*["']react-grab["']\s*\);?/,
-  );
-
-  if (reactGrabImportMatch) {
-    const matchedText = reactGrabImportMatch[0];
-    const hasSemicolon = matchedText.endsWith(";");
-    const newContent = originalContent.replace(
-      matchedText,
-      `${hasSemicolon ? matchedText.slice(0, -1) : matchedText};\n  ${agentImport}`,
-    );
-    return {
-      success: true,
-      filePath,
-      message: `Add ${agent} agent`,
-      originalContent,
-      newContent,
-    };
-  }
-
-  return {
-    success: false,
-    filePath,
-    message: "Could not find React Grab import to add agent after",
-  };
-};
-
-const addAgentToExistingTanStack = (
-  originalContent: string,
-  agent: AgentIntegration,
-  filePath: string,
-): TransformResult => {
-  if (agent === "none") {
-    return {
-      success: true,
-      filePath,
-      message: "React Grab is already configured",
-      noChanges: true,
-    };
-  }
-
-  const agentPackage = `@react-grab/${agent}`;
-  if (originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is already configured`,
-      noChanges: true,
-    };
-  }
-
-  const agentImport = `void import("${agentPackage}/client");`;
-  const reactGrabImportMatch = originalContent.match(
-    /void\s+import\s*\(\s*["']react-grab["']\s*\);?/,
-  );
-
-  if (reactGrabImportMatch) {
-    const matchedText = reactGrabImportMatch[0];
-    const hasSemicolon = matchedText.endsWith(";");
-    const newContent = originalContent.replace(
-      matchedText,
-      `${hasSemicolon ? matchedText.slice(0, -1) : matchedText};\n      ${agentImport}`,
-    );
-    return {
-      success: true,
-      filePath,
-      message: `Add ${agent} agent`,
-      originalContent,
-      newContent,
-    };
-  }
-
-  return {
-    success: false,
-    filePath,
-    message: "Could not find React Grab import to add agent after",
-  };
-};
+const alreadyConfiguredResult = (filePath: string): TransformResult => ({
+  success: true,
+  filePath,
+  message: "React Grab is already configured",
+  noChanges: true,
+});
 
 const transformNextAppRouter = (
   projectRoot: string,
-  agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
 ): TransformResult => {
   const layoutPath = findLayoutFile(projectRoot);
@@ -411,18 +69,17 @@ const transformNextAppRouter = (
     return {
       success: false,
       filePath: "",
-      message: "Could not find app/layout.tsx or app/layout.jsx",
+      message: "Could not find app/layout.tsx, app/layout.jsx, app/layout.ts, or app/layout.js",
     };
   }
 
   const originalContent = readFileSync(layoutPath, "utf-8");
   let newContent = originalContent;
-  const hasReactGrabInFile = hasReactGrabCode(originalContent);
-  const hasReactGrabInInstrumentationFile =
-    hasReactGrabInInstrumentation(projectRoot);
+  const hasReactGrabInFile = hasReactGrabSetupCode(originalContent);
+  const hasReactGrabInInstrumentationFile = hasReactGrabInInstrumentation(projectRoot);
 
   if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
-    return addAgentToExistingNextApp(originalContent, agent, layoutPath);
+    return alreadyConfiguredResult(layoutPath);
   }
 
   if (hasReactGrabInFile || hasReactGrabInInstrumentationFile) {
@@ -431,9 +88,7 @@ const transformNextAppRouter = (
       filePath: layoutPath,
       message:
         "React Grab is already installed" +
-        (hasReactGrabInInstrumentationFile
-          ? " in instrumentation-client"
-          : " in this file"),
+        (hasReactGrabInInstrumentationFile ? " in instrumentation-client" : " in this file"),
       noChanges: true,
     };
   }
@@ -441,29 +96,24 @@ const transformNextAppRouter = (
   if (!newContent.includes('import Script from "next/script"')) {
     const importMatch = newContent.match(/^import .+ from ['"].+['"];?\s*$/m);
     if (importMatch) {
-      newContent = newContent.replace(
-        importMatch[0],
-        `${importMatch[0]}\n${SCRIPT_IMPORT}`,
-      );
+      newContent = newContent.replace(importMatch[0], `${importMatch[0]}\n${SCRIPT_IMPORT}`);
     } else {
       newContent = `${SCRIPT_IMPORT}\n\n${newContent}`;
     }
   }
 
-  const scriptBlock = NEXT_APP_ROUTER_SCRIPT_WITH_AGENT(agent);
-
   const headMatch = newContent.match(/<head[^>]*>/);
   if (headMatch) {
     newContent = newContent.replace(
       headMatch[0],
-      `${headMatch[0]}\n        ${scriptBlock}`,
+      `${headMatch[0]}\n        ${NEXT_APP_ROUTER_SCRIPT}`,
     );
   } else {
     const htmlMatch = newContent.match(/<html[^>]*>/);
     if (htmlMatch) {
       newContent = newContent.replace(
         htmlMatch[0],
-        `${htmlMatch[0]}\n      <head>\n        ${scriptBlock}\n      </head>`,
+        `${htmlMatch[0]}\n      <head>\n        ${NEXT_APP_ROUTER_SCRIPT}\n      </head>`,
       );
     }
   }
@@ -471,8 +121,7 @@ const transformNextAppRouter = (
   return {
     success: true,
     filePath: layoutPath,
-    message:
-      "Add React Grab" + (agent !== "none" ? ` with ${agent} agent` : ""),
+    message: "Add React Grab",
     originalContent,
     newContent,
   };
@@ -480,7 +129,6 @@ const transformNextAppRouter = (
 
 const transformNextPagesRouter = (
   projectRoot: string,
-  agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
 ): TransformResult => {
   const documentPath = findDocumentFile(projectRoot);
@@ -490,7 +138,7 @@ const transformNextPagesRouter = (
       success: false,
       filePath: "",
       message:
-        "Could not find pages/_document.tsx or pages/_document.jsx.\n\n" +
+        "Could not find pages/_document.tsx, pages/_document.jsx, pages/_document.ts, or pages/_document.js.\n\n" +
         "To set up React Grab with Pages Router, create pages/_document.tsx with:\n\n" +
         '  import { Html, Head, Main, NextScript } from "next/document";\n' +
         '  import Script from "next/script";\n\n' +
@@ -514,12 +162,11 @@ const transformNextPagesRouter = (
 
   const originalContent = readFileSync(documentPath, "utf-8");
   let newContent = originalContent;
-  const hasReactGrabInFile = hasReactGrabCode(originalContent);
-  const hasReactGrabInInstrumentationFile =
-    hasReactGrabInInstrumentation(projectRoot);
+  const hasReactGrabInFile = hasReactGrabSetupCode(originalContent);
+  const hasReactGrabInInstrumentationFile = hasReactGrabInInstrumentation(projectRoot);
 
   if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
-    return addAgentToExistingNextApp(originalContent, agent, documentPath);
+    return alreadyConfiguredResult(documentPath);
   }
 
   if (hasReactGrabInFile || hasReactGrabInInstrumentationFile) {
@@ -528,9 +175,7 @@ const transformNextPagesRouter = (
       filePath: documentPath,
       message:
         "React Grab is already installed" +
-        (hasReactGrabInInstrumentationFile
-          ? " in instrumentation-client"
-          : " in this file"),
+        (hasReactGrabInInstrumentationFile ? " in instrumentation-client" : " in this file"),
       noChanges: true,
     };
   }
@@ -538,80 +183,74 @@ const transformNextPagesRouter = (
   if (!newContent.includes('import Script from "next/script"')) {
     const importMatch = newContent.match(/^import .+ from ['"].+['"];?\s*$/m);
     if (importMatch) {
-      newContent = newContent.replace(
-        importMatch[0],
-        `${importMatch[0]}\n${SCRIPT_IMPORT}`,
-      );
+      newContent = newContent.replace(importMatch[0], `${importMatch[0]}\n${SCRIPT_IMPORT}`);
     }
   }
-
-  const scriptBlock = NEXT_PAGES_ROUTER_SCRIPT_WITH_AGENT(agent);
 
   const headMatch = newContent.match(/<Head[^>]*>/);
   if (headMatch) {
     newContent = newContent.replace(
       headMatch[0],
-      `${headMatch[0]}\n        ${scriptBlock}`,
+      `${headMatch[0]}\n        ${NEXT_APP_ROUTER_SCRIPT}`,
     );
   }
 
   return {
     success: true,
     filePath: documentPath,
-    message:
-      "Add React Grab" + (agent !== "none" ? ` with ${agent} agent` : ""),
+    message: "Add React Grab",
     originalContent,
     newContent,
   };
 };
 
-const transformVite = (
-  projectRoot: string,
-  agent: AgentIntegration,
+const checkExistingInstallation = (
+  filePath: string,
   reactGrabAlreadyConfigured: boolean,
-): TransformResult => {
-  const indexPath = findIndexHtml(projectRoot);
-
-  if (!indexPath) {
-    return {
-      success: false,
-      filePath: "",
-      message: "Could not find index.html",
-    };
-  }
-
-  const originalContent = readFileSync(indexPath, "utf-8");
-  let newContent = originalContent;
-  const hasReactGrabInFile = hasReactGrabCode(originalContent);
-
-  if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
-    return addAgentToExistingVite(originalContent, agent, indexPath);
-  }
-
-  if (hasReactGrabInFile) {
-    return {
-      success: true,
-      filePath: indexPath,
-      message: "React Grab is already installed in this file",
-      noChanges: true,
-    };
-  }
-
-  const scriptBlock = VITE_SCRIPT_WITH_AGENT(agent);
-
-  const headMatch = newContent.match(/<head[^>]*>/i);
-  if (headMatch) {
-    newContent = newContent.replace(
-      headMatch[0],
-      `${headMatch[0]}\n    ${scriptBlock}`,
-    );
-  }
+): TransformResult | null => {
+  const content = readFileSync(filePath, "utf-8");
+  if (!hasReactGrabSetupCode(content)) return null;
 
   return {
     success: true,
-    filePath: indexPath,
-    message:
-      "Add React Grab" + (agent !== "none" ? ` with ${agent} agent` : ""),
+    filePath,
+    message: reactGrabAlreadyConfigured
+      ? "React Grab is already configured"
+      : "React Grab is already installed in this file",
+    noChanges: true,
+  };
+};
+
+const transformVite = (
+  projectRoot: string,
+  reactGrabAlreadyConfigured: boolean,
+): TransformResult => {
+  const entryPath = findEntryFile(projectRoot);
+
+  const indexPath = findIndexHtml(projectRoot);
+  if (indexPath) {
+    const existingResult = checkExistingInstallation(indexPath, reactGrabAlreadyConfigured);
+    if (existingResult) return existingResult;
+  }
+
+  if (!entryPath) {
+    return {
+      success: false,
+      filePath: "",
+      message: "Could not find entry file (src/index.tsx, src/main.tsx, etc.)",
+    };
+  }
+
+  const existingResult = checkExistingInstallation(entryPath, reactGrabAlreadyConfigured);
+  if (existingResult) return existingResult;
+
+  const originalContent = readFileSync(entryPath, "utf-8");
+  const newContent = `${VITE_IMPORT}\n\n${originalContent}`;
+
+  return {
+    success: true,
+    filePath: entryPath,
+    message: "Add React Grab",
     originalContent,
     newContent,
   };
@@ -619,7 +258,6 @@ const transformVite = (
 
 const transformWebpack = (
   projectRoot: string,
-  agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
 ): TransformResult => {
   const entryPath = findEntryFile(projectRoot);
@@ -632,30 +270,16 @@ const transformWebpack = (
     };
   }
 
+  const existingResult = checkExistingInstallation(entryPath, reactGrabAlreadyConfigured);
+  if (existingResult) return existingResult;
+
   const originalContent = readFileSync(entryPath, "utf-8");
-  const hasReactGrabInFile = hasReactGrabCode(originalContent);
-
-  if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
-    return addAgentToExistingWebpack(originalContent, agent, entryPath);
-  }
-
-  if (hasReactGrabInFile) {
-    return {
-      success: true,
-      filePath: entryPath,
-      message: "React Grab is already installed in this file",
-      noChanges: true,
-    };
-  }
-
-  const importBlock = WEBPACK_IMPORT_WITH_AGENT(agent);
-  const newContent = `${importBlock}\n\n${originalContent}`;
+  const newContent = `${WEBPACK_IMPORT}\n\n${originalContent}`;
 
   return {
     success: true,
     filePath: entryPath,
-    message:
-      "Add React Grab" + (agent !== "none" ? ` with ${agent} agent` : ""),
+    message: "Add React Grab",
     originalContent,
     newContent,
   };
@@ -663,7 +287,6 @@ const transformWebpack = (
 
 const transformTanStack = (
   projectRoot: string,
-  agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean,
 ): TransformResult => {
   const rootPath = findTanStackRootFile(projectRoot);
@@ -686,10 +309,10 @@ const transformTanStack = (
 
   const originalContent = readFileSync(rootPath, "utf-8");
   let newContent = originalContent;
-  const hasReactGrabInFile = hasReactGrabCode(originalContent);
+  const hasReactGrabInFile = hasReactGrabSetupCode(originalContent);
 
   if (hasReactGrabInFile && reactGrabAlreadyConfigured) {
-    return addAgentToExistingTanStack(originalContent, agent, rootPath);
+    return alreadyConfiguredResult(rootPath);
   }
 
   if (hasReactGrabInFile) {
@@ -701,12 +324,11 @@ const transformTanStack = (
     };
   }
 
-  const hasUseEffectImport =
-    /import\s+\{[^}]*useEffect[^}]*\}\s+from\s+["']react["']/.test(newContent);
+  const hasUseEffectImport = /import\s+\{[^}]*useEffect[^}]*\}\s+from\s+["']react["']/.test(
+    newContent,
+  );
   if (!hasUseEffectImport) {
-    const reactImportMatch = newContent.match(
-      /import\s+\{([^}]*)\}\s+from\s+["']react["'];?/,
-    );
+    const reactImportMatch = newContent.match(/import\s+\{([^}]*)\}\s+from\s+["']react["'];?/);
     if (reactImportMatch) {
       const existingImports = reactImportMatch[1];
       newContent = newContent.replace(
@@ -714,9 +336,7 @@ const transformTanStack = (
         `import { ${existingImports.trim()}, useEffect } from "react";`,
       );
     } else {
-      const firstImportMatch = newContent.match(
-        /^import .+ from ['"].+['"];?\s*$/m,
-      );
+      const firstImportMatch = newContent.match(/^import .+ from ['"].+['"];?\s*$/m);
       if (firstImportMatch) {
         newContent = newContent.replace(
           firstImportMatch[0],
@@ -728,15 +348,13 @@ const transformTanStack = (
     }
   }
 
-  const effectBlock = TANSTACK_EFFECT_WITH_AGENT(agent);
-
   const componentMatch = newContent.match(/function\s+(\w+)\s*\([^)]*\)\s*\{/);
 
   if (componentMatch) {
     const insertPosition = componentMatch.index! + componentMatch[0].length;
     newContent =
       newContent.slice(0, insertPosition) +
-      `\n  ${effectBlock}\n` +
+      `\n  ${TANSTACK_EFFECT}\n` +
       newContent.slice(insertPosition);
   } else {
     return {
@@ -749,43 +367,53 @@ const transformTanStack = (
   return {
     success: true,
     filePath: rootPath,
-    message:
-      "Add React Grab" + (agent !== "none" ? ` with ${agent} agent` : ""),
+    message: "Add React Grab",
     originalContent,
     newContent,
   };
+};
+
+export const hasFrameworkEntryPoint = (
+  projectRoot: string,
+  framework: Framework,
+  nextRouterType: NextRouterType,
+): boolean => {
+  switch (framework) {
+    case "next":
+      return nextRouterType === "app"
+        ? findLayoutFile(projectRoot) !== null
+        : findDocumentFile(projectRoot) !== null;
+    case "vite":
+    case "webpack":
+      return findEntryFile(projectRoot) !== null;
+    case "tanstack":
+      return findTanStackRootFile(projectRoot) !== null;
+    default:
+      return false;
+  }
 };
 
 export const previewTransform = (
   projectRoot: string,
   framework: Framework,
   nextRouterType: NextRouterType,
-  agent: AgentIntegration,
   reactGrabAlreadyConfigured: boolean = false,
 ): TransformResult => {
   switch (framework) {
     case "next":
       if (nextRouterType === "app") {
-        return transformNextAppRouter(
-          projectRoot,
-          agent,
-          reactGrabAlreadyConfigured,
-        );
+        return transformNextAppRouter(projectRoot, reactGrabAlreadyConfigured);
       }
-      return transformNextPagesRouter(
-        projectRoot,
-        agent,
-        reactGrabAlreadyConfigured,
-      );
+      return transformNextPagesRouter(projectRoot, reactGrabAlreadyConfigured);
 
     case "vite":
-      return transformVite(projectRoot, agent, reactGrabAlreadyConfigured);
+      return transformVite(projectRoot, reactGrabAlreadyConfigured);
 
     case "tanstack":
-      return transformTanStack(projectRoot, agent, reactGrabAlreadyConfigured);
+      return transformTanStack(projectRoot, reactGrabAlreadyConfigured);
 
     case "webpack":
-      return transformWebpack(projectRoot, agent, reactGrabAlreadyConfigured);
+      return transformWebpack(projectRoot, reactGrabAlreadyConfigured);
 
     default:
       return {
@@ -805,215 +433,7 @@ const canWriteToFile = (filePath: string): boolean => {
   }
 };
 
-export const applyTransform = (
-  result: TransformResult,
-): { success: boolean; error?: string } => {
-  if (result.success && result.newContent && result.filePath) {
-    if (!canWriteToFile(result.filePath)) {
-      return {
-        success: false,
-        error: `Cannot write to ${result.filePath}. Check file permissions.`,
-      };
-    }
-
-    try {
-      writeFileSync(result.filePath, result.newContent);
-      return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to write to ${result.filePath}: ${error instanceof Error ? error.message : "Unknown error"}`,
-      };
-    }
-  }
-  return { success: true };
-};
-
-export const transformProject = (
-  projectRoot: string,
-  framework: Framework,
-  nextRouterType: NextRouterType,
-  agent: AgentIntegration,
-  reactGrabAlreadyConfigured: boolean = false,
-): TransformResult & { writeError?: string } => {
-  const result = previewTransform(
-    projectRoot,
-    framework,
-    nextRouterType,
-    agent,
-    reactGrabAlreadyConfigured,
-  );
-  const writeResult = applyTransform(result);
-  if (!writeResult.success) {
-    return { ...result, success: false, writeError: writeResult.error };
-  }
-  return result;
-};
-
-const getPackageExecutor = (packageManager: PackageManager): string => {
-  switch (packageManager) {
-    case "bun":
-      return "bunx";
-    case "pnpm":
-      return "pnpm dlx";
-    case "yarn":
-      return "npx";
-    case "npm":
-    default:
-      return "npx";
-  }
-};
-
-const AGENT_PACKAGES: Record<string, string> = {
-  "claude-code": "@react-grab/claude-code@latest",
-  cursor: "@react-grab/cursor@latest",
-  opencode: "@react-grab/opencode@latest",
-  codex: "@react-grab/codex@latest",
-  gemini: "@react-grab/gemini@latest",
-  amp: "@react-grab/amp@latest",
-};
-
-export const getAgentPrefix = (
-  agent: string,
-  packageManager: PackageManager,
-): string | null => {
-  const agentPackage = AGENT_PACKAGES[agent];
-  if (!agentPackage) return null;
-  const executor = getPackageExecutor(packageManager);
-  return `${executor} ${agentPackage} &&`;
-};
-
-const getAllAgentPrefixVariants = (agent: string): string[] => {
-  const agentPackage = AGENT_PACKAGES[agent];
-  if (!agentPackage) return [];
-  return [
-    `npx ${agentPackage} &&`,
-    `bunx ${agentPackage} &&`,
-    `pnpm dlx ${agentPackage} &&`,
-    `yarn dlx ${agentPackage} &&`,
-  ];
-};
-
-export const previewPackageJsonTransform = (
-  projectRoot: string,
-  agent: AgentIntegration,
-  installedAgents: string[],
-  packageManager: PackageManager = "npm",
-): PackageJsonTransformResult => {
-  if (agent === "none") {
-    return {
-      success: true,
-      filePath: "",
-      message: "No agent selected, skipping package.json modification",
-      noChanges: true,
-    };
-  }
-
-  if (agent === "mcp") {
-    return {
-      success: true,
-      filePath: "",
-      message: "MCP does not use package.json dev script",
-      noChanges: true,
-    };
-  }
-
-  const packageJsonPath = join(projectRoot, "package.json");
-
-  if (!existsSync(packageJsonPath)) {
-    return {
-      success: false,
-      filePath: "",
-      message: "Could not find package.json",
-    };
-  }
-
-  const originalContent = readFileSync(packageJsonPath, "utf-8");
-  const agentPrefix = getAgentPrefix(agent, packageManager);
-
-  if (!agentPrefix) {
-    return {
-      success: false,
-      filePath: packageJsonPath,
-      message: `Unknown agent: ${agent}`,
-    };
-  }
-
-  const allPrefixVariants = getAllAgentPrefixVariants(agent);
-  const hasExistingPrefix = allPrefixVariants.some((prefix) =>
-    originalContent.includes(prefix),
-  );
-
-  if (hasExistingPrefix) {
-    return {
-      success: true,
-      filePath: packageJsonPath,
-      message: `Agent ${agent} dev script is already configured`,
-      noChanges: true,
-    };
-  }
-
-  try {
-    const packageJson = JSON.parse(originalContent);
-
-    let targetScriptKey = "dev";
-    if (!packageJson.scripts?.dev) {
-      const devScriptKeys = Object.keys(packageJson.scripts || {}).filter(
-        (key) => key.startsWith("dev"),
-      );
-      if (devScriptKeys.length > 0) {
-        targetScriptKey = devScriptKeys[0];
-      } else {
-        return {
-          success: true,
-          filePath: packageJsonPath,
-          message: "No dev script found in package.json",
-          noChanges: true,
-          warning: `Could not inject agent into package.json (no dev script found).\nRun this command manually before starting your dev server:\n  ${agentPrefix} <your dev command>`,
-        };
-      }
-    }
-
-    const currentDevScript = packageJson.scripts[targetScriptKey];
-
-    for (const installedAgent of installedAgents) {
-      const installedPrefixVariants = getAllAgentPrefixVariants(installedAgent);
-      const hasInstalledAgentPrefix = installedPrefixVariants.some((prefix) =>
-        currentDevScript.includes(prefix),
-      );
-      if (hasInstalledAgentPrefix) {
-        return {
-          success: true,
-          filePath: packageJsonPath,
-          message: `Agent ${installedAgent} is already in ${targetScriptKey} script`,
-          noChanges: true,
-        };
-      }
-    }
-
-    packageJson.scripts[targetScriptKey] = `${agentPrefix} ${currentDevScript}`;
-
-    const newContent = JSON.stringify(packageJson, null, 2) + "\n";
-
-    return {
-      success: true,
-      filePath: packageJsonPath,
-      message: `Add ${agent} server to ${targetScriptKey} script`,
-      originalContent,
-      newContent,
-    };
-  } catch {
-    return {
-      success: false,
-      filePath: packageJsonPath,
-      message: "Failed to parse package.json",
-    };
-  }
-};
-
-export const applyPackageJsonTransform = (
-  result: PackageJsonTransformResult,
-): { success: boolean; error?: string } => {
+export const applyTransform = (result: TransformResult): { success: boolean; error?: string } => {
   if (result.success && result.newContent && result.filePath) {
     if (!canWriteToFile(result.filePath)) {
       return {
@@ -1051,9 +471,7 @@ const formatOptionsForNextjs = (options: ReactGrabOptions): string => {
   }
 
   if (options.allowActivationInsideInput !== undefined) {
-    parts.push(
-      `allowActivationInsideInput: ${options.allowActivationInsideInput}`,
-    );
+    parts.push(`allowActivationInsideInput: ${options.allowActivationInsideInput}`);
   }
 
   if (options.maxContextLines !== undefined) {
@@ -1079,8 +497,7 @@ const formatOptionsAsJson = (options: ReactGrabOptions): string => {
   }
 
   if (options.allowActivationInsideInput !== undefined) {
-    cleanOptions.allowActivationInsideInput =
-      options.allowActivationInsideInput;
+    cleanOptions.allowActivationInsideInput = options.allowActivationInsideInput;
   }
 
   if (options.maxContextLines !== undefined) {
@@ -1096,17 +513,41 @@ const findReactGrabFile = (
   nextRouterType: NextRouterType,
 ): string | null => {
   switch (framework) {
-    case "next":
-      if (nextRouterType === "app") {
-        return findLayoutFile(projectRoot);
-      }
-      return findDocumentFile(projectRoot);
-    case "vite":
-      return findIndexHtml(projectRoot);
-    case "tanstack":
-      return findTanStackRootFile(projectRoot);
-    case "webpack":
-      return findEntryFile(projectRoot);
+    case "next": {
+      const primaryFile =
+        nextRouterType === "app" ? findLayoutFile(projectRoot) : findDocumentFile(projectRoot);
+      const primaryCandidates =
+        nextRouterType === "app"
+          ? getLayoutFileCandidates(projectRoot)
+          : getDocumentFileCandidates(projectRoot);
+      const primarySetupFile = findFileWithReactGrabSetup(primaryCandidates);
+      if (primarySetupFile) return primarySetupFile;
+
+      const instrumentationFile = findFileWithReactGrabSetup(
+        getInstrumentationFileCandidates(projectRoot),
+      );
+      if (instrumentationFile) return instrumentationFile;
+
+      return primaryFile;
+    }
+    case "vite": {
+      const entryFile = findEntryFile(projectRoot);
+      const entrySetupFile = findFileWithReactGrabSetup(getEntryFileCandidates(projectRoot));
+      if (entrySetupFile) return entrySetupFile;
+
+      const indexHtml = findFileWithReactGrabSetup(getIndexHtmlCandidates(projectRoot));
+      if (indexHtml) return indexHtml;
+
+      return entryFile;
+    }
+    case "tanstack": {
+      const rootSetupFile = findFileWithReactGrabSetup(getTanStackRootFileCandidates(projectRoot));
+      return rootSetupFile ?? findTanStackRootFile(projectRoot);
+    }
+    case "webpack": {
+      const entrySetupFile = findFileWithReactGrabSetup(getEntryFileCandidates(projectRoot));
+      return entrySetupFile ?? findEntryFile(projectRoot);
+    }
     default:
       return null;
   }
@@ -1133,18 +574,13 @@ const addOptionsToNextScript = (
   const scriptOpening = reactGrabScriptMatch[1];
   const scriptClosing = reactGrabScriptMatch[2];
 
-  const existingDataOptionsMatch = scriptTag.match(
-    /data-options=\{JSON\.stringify\([^)]+\)\}/,
-  );
+  const existingDataOptionsMatch = scriptTag.match(/data-options=\{JSON\.stringify\([^)]+\)\}/);
 
   const dataOptionsAttr = `data-options={JSON.stringify(\n              ${formatOptionsForNextjs(options)}\n            )}`;
 
   let newScriptTag: string;
   if (existingDataOptionsMatch) {
-    newScriptTag = scriptTag.replace(
-      existingDataOptionsMatch[0],
-      dataOptionsAttr,
-    );
+    newScriptTag = scriptTag.replace(existingDataOptionsMatch[0], dataOptionsAttr);
   } else {
     newScriptTag = `${scriptOpening}\n            ${dataOptionsAttr}\n          ${scriptClosing}`;
   }
@@ -1160,13 +596,13 @@ const addOptionsToNextScript = (
   };
 };
 
-const addOptionsToViteScript = (
+const addOptionsToDynamicImport = (
   originalContent: string,
   options: ReactGrabOptions,
   filePath: string,
 ): TransformResult => {
   const reactGrabImportWithInitMatch = originalContent.match(
-    /import\s*\(\s*["']react-grab["']\s*\)(?:\.then\s*\(\s*\(m\)\s*=>\s*m\.init\s*\([^)]*\)\s*\))?/,
+    /(void\s+)?import\s*\(\s*["']react-grab(?:\/[^"']+)?["']\s*\)(?:\.then\s*\(\s*(?:\(m\)\s*=>\s*m\.init\s*\([^)]*\)|\(\{\s*init\s*\}\)\s*=>\s*init\s*\([^)]*\))\s*\))?/,
   );
 
   if (!reactGrabImportWithInitMatch) {
@@ -1178,46 +614,10 @@ const addOptionsToViteScript = (
   }
 
   const optionsJson = formatOptionsAsJson(options);
-  const newImport = `import("react-grab").then((m) => m.init(${optionsJson}))`;
+  const voidPrefix = reactGrabImportWithInitMatch[1] ?? "";
+  const newImport = `${voidPrefix}import("react-grab").then((m) => m.init(${optionsJson}))`;
 
-  const newContent = originalContent.replace(
-    reactGrabImportWithInitMatch[0],
-    newImport,
-  );
-
-  return {
-    success: true,
-    filePath,
-    message: "Update React Grab options",
-    originalContent,
-    newContent,
-  };
-};
-
-const addOptionsToWebpackImport = (
-  originalContent: string,
-  options: ReactGrabOptions,
-  filePath: string,
-): TransformResult => {
-  const reactGrabImportWithInitMatch = originalContent.match(
-    /import\s*\(\s*["']react-grab["']\s*\)(?:\.then\s*\(\s*\(m\)\s*=>\s*m\.init\s*\([^)]*\)\s*\))?/,
-  );
-
-  if (!reactGrabImportWithInitMatch) {
-    return {
-      success: false,
-      filePath,
-      message: "Could not find React Grab import",
-    };
-  }
-
-  const optionsJson = formatOptionsAsJson(options);
-  const newImport = `import("react-grab").then((m) => m.init(${optionsJson}))`;
-
-  const newContent = originalContent.replace(
-    reactGrabImportWithInitMatch[0],
-    newImport,
-  );
+  const newContent = originalContent.replace(reactGrabImportWithInitMatch[0], newImport);
 
   return {
     success: true,
@@ -1234,7 +634,7 @@ const addOptionsToTanStackImport = (
   filePath: string,
 ): TransformResult => {
   const reactGrabImportWithInitMatch = originalContent.match(
-    /(?:void\s+import\s*\(\s*["']react-grab["']\s*\)|import\s*\(\s*["']react-grab\/core["']\s*\)\.then\s*\(\s*\(\s*\{\s*init\s*\}\s*\)\s*=>\s*init\s*\([^)]*\)\s*\))/,
+    /(?:(void\s+)?import\s*\(\s*["']react-grab\/core["']\s*\)\.then\s*\(\s*(?:\(\s*\{\s*init\s*\}\s*\)\s*=>\s*init\s*\([^)]*\)|\(m\)\s*=>\s*m\.init\s*\([^)]*\))\s*\)|(void\s+)?import\s*\(\s*["']react-grab(?!\/core)(?:\/[^"']+)?["']\s*\))/,
   );
 
   if (!reactGrabImportWithInitMatch) {
@@ -1246,12 +646,10 @@ const addOptionsToTanStackImport = (
   }
 
   const optionsJson = formatOptionsAsJson(options);
-  const newImport = `import("react-grab/core").then(({ init }) => init(${optionsJson}))`;
+  const voidPrefix = reactGrabImportWithInitMatch[1] ?? reactGrabImportWithInitMatch[2] ?? "";
+  const newImport = `${voidPrefix}import("react-grab/core").then(({ init }) => init(${optionsJson}))`;
 
-  const newContent = originalContent.replace(
-    reactGrabImportWithInitMatch[0],
-    newImport,
-  );
+  const newContent = originalContent.replace(reactGrabImportWithInitMatch[0], newImport);
 
   return {
     success: true,
@@ -1260,6 +658,16 @@ const addOptionsToTanStackImport = (
     originalContent,
     newContent,
   };
+};
+
+const addOptionsToAnyImport = (
+  originalContent: string,
+  options: ReactGrabOptions,
+  filePath: string,
+): TransformResult => {
+  const dynamicImportResult = addOptionsToDynamicImport(originalContent, options, filePath);
+  if (dynamicImportResult.success) return dynamicImportResult;
+  return addOptionsToTanStackImport(originalContent, options, filePath);
 };
 
 export const previewOptionsTransform = (
@@ -1280,7 +688,7 @@ export const previewOptionsTransform = (
 
   const originalContent = readFileSync(filePath, "utf-8");
 
-  if (!hasReactGrabCode(originalContent)) {
+  if (!hasReactGrabSetupCode(originalContent)) {
     return {
       success: false,
       filePath,
@@ -1290,306 +698,22 @@ export const previewOptionsTransform = (
 
   switch (framework) {
     case "next":
+      if (isInstrumentationFile(filePath)) {
+        return addOptionsToAnyImport(originalContent, options, filePath);
+      }
       return addOptionsToNextScript(originalContent, options, filePath);
     case "vite":
-      return addOptionsToViteScript(originalContent, options, filePath);
+      return addOptionsToDynamicImport(originalContent, options, filePath);
     case "tanstack":
       return addOptionsToTanStackImport(originalContent, options, filePath);
     case "webpack":
-      return addOptionsToWebpackImport(originalContent, options, filePath);
+      return addOptionsToDynamicImport(originalContent, options, filePath);
     default:
       return {
         success: false,
         filePath,
         message: `Unknown framework: ${framework}`,
       };
-  }
-};
-
-export const applyOptionsTransform = (
-  result: TransformResult,
-): { success: boolean; error?: string } => {
-  return applyTransform(result);
-};
-
-const removeAgentFromNextApp = (
-  originalContent: string,
-  agent: string,
-  filePath: string,
-): TransformResult => {
-  const agentPackage = `@react-grab/${agent}`;
-
-  if (!originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is not configured in this file`,
-      noChanges: true,
-    };
-  }
-
-  const agentScriptPattern = new RegExp(
-    `\\s*\\{process\\.env\\.NODE_ENV === "development" && \\(\\s*<Script[^>]*${agentPackage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^>]*\\/>\\s*\\)\\}`,
-    "gs",
-  );
-
-  const simpleScriptPattern = new RegExp(
-    `\\s*<Script[^>]*${agentPackage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^>]*\\/>`,
-    "gi",
-  );
-
-  let newContent = originalContent.replace(agentScriptPattern, "");
-
-  if (newContent === originalContent) {
-    newContent = originalContent.replace(simpleScriptPattern, "");
-  }
-
-  if (newContent === originalContent) {
-    return {
-      success: false,
-      filePath,
-      message: `Could not find agent ${agent} script to remove`,
-    };
-  }
-
-  return {
-    success: true,
-    filePath,
-    message: `Remove ${agent} agent`,
-    originalContent,
-    newContent,
-  };
-};
-
-const removeAgentFromVite = (
-  originalContent: string,
-  agent: string,
-  filePath: string,
-): TransformResult => {
-  const agentPackage = `@react-grab/${agent}`;
-
-  if (!originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is not configured in this file`,
-      noChanges: true,
-    };
-  }
-
-  const agentImportPattern = new RegExp(
-    `\\s*import\\s*\\(\\s*["']${agentPackage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/client["']\\s*\\);?`,
-    "g",
-  );
-
-  const newContent = originalContent.replace(agentImportPattern, "");
-
-  if (newContent === originalContent) {
-    return {
-      success: false,
-      filePath,
-      message: `Could not find agent ${agent} import to remove`,
-    };
-  }
-
-  return {
-    success: true,
-    filePath,
-    message: `Remove ${agent} agent`,
-    originalContent,
-    newContent,
-  };
-};
-
-const removeAgentFromWebpack = (
-  originalContent: string,
-  agent: string,
-  filePath: string,
-): TransformResult => {
-  const agentPackage = `@react-grab/${agent}`;
-
-  if (!originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is not configured in this file`,
-      noChanges: true,
-    };
-  }
-
-  const agentImportPattern = new RegExp(
-    `\\s*import\\s*\\(\\s*["']${agentPackage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/client["']\\s*\\);?`,
-    "g",
-  );
-
-  const newContent = originalContent.replace(agentImportPattern, "");
-
-  if (newContent === originalContent) {
-    return {
-      success: false,
-      filePath,
-      message: `Could not find agent ${agent} import to remove`,
-    };
-  }
-
-  return {
-    success: true,
-    filePath,
-    message: `Remove ${agent} agent`,
-    originalContent,
-    newContent,
-  };
-};
-
-const removeAgentFromTanStack = (
-  originalContent: string,
-  agent: string,
-  filePath: string,
-): TransformResult => {
-  const agentPackage = `@react-grab/${agent}`;
-
-  if (!originalContent.includes(agentPackage)) {
-    return {
-      success: true,
-      filePath,
-      message: `Agent ${agent} is not configured in this file`,
-      noChanges: true,
-    };
-  }
-
-  const agentImportPattern = new RegExp(
-    `\\s*void\\s+import\\s*\\(\\s*["']${agentPackage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/client["']\\s*\\);?`,
-    "g",
-  );
-
-  const newContent = originalContent.replace(agentImportPattern, "");
-
-  if (newContent === originalContent) {
-    return {
-      success: false,
-      filePath,
-      message: `Could not find agent ${agent} import to remove`,
-    };
-  }
-
-  return {
-    success: true,
-    filePath,
-    message: `Remove ${agent} agent`,
-    originalContent,
-    newContent,
-  };
-};
-
-export const previewAgentRemoval = (
-  projectRoot: string,
-  framework: Framework,
-  nextRouterType: NextRouterType,
-  agent: string,
-): TransformResult => {
-  const filePath = findReactGrabFile(projectRoot, framework, nextRouterType);
-
-  if (!filePath) {
-    return {
-      success: true,
-      filePath: "",
-      message: "Could not find file containing React Grab configuration",
-      noChanges: true,
-    };
-  }
-
-  const originalContent = readFileSync(filePath, "utf-8");
-
-  switch (framework) {
-    case "next":
-      return removeAgentFromNextApp(originalContent, agent, filePath);
-    case "vite":
-      return removeAgentFromVite(originalContent, agent, filePath);
-    case "tanstack":
-      return removeAgentFromTanStack(originalContent, agent, filePath);
-    case "webpack":
-      return removeAgentFromWebpack(originalContent, agent, filePath);
-    default:
-      return {
-        success: false,
-        filePath,
-        message: `Unknown framework: ${framework}`,
-      };
-  }
-};
-
-export const previewPackageJsonAgentRemoval = (
-  projectRoot: string,
-  agent: string,
-): PackageJsonTransformResult => {
-  const packageJsonPath = join(projectRoot, "package.json");
-
-  if (!existsSync(packageJsonPath)) {
-    return {
-      success: true,
-      filePath: "",
-      message: "Could not find package.json",
-      noChanges: true,
-    };
-  }
-
-  const originalContent = readFileSync(packageJsonPath, "utf-8");
-  const allPrefixVariants = getAllAgentPrefixVariants(agent);
-
-  if (allPrefixVariants.length === 0) {
-    return {
-      success: true,
-      filePath: packageJsonPath,
-      message: `Unknown agent: ${agent}`,
-      noChanges: true,
-    };
-  }
-
-  const hasAnyPrefix = allPrefixVariants.some((prefix) =>
-    originalContent.includes(prefix),
-  );
-
-  if (!hasAnyPrefix) {
-    return {
-      success: true,
-      filePath: packageJsonPath,
-      message: `Agent ${agent} dev script is not configured`,
-      noChanges: true,
-    };
-  }
-
-  try {
-    const packageJson = JSON.parse(originalContent);
-
-    for (const scriptKey of Object.keys(packageJson.scripts || {})) {
-      let scriptValue = packageJson.scripts[scriptKey];
-      if (typeof scriptValue === "string") {
-        for (const prefix of allPrefixVariants) {
-          if (scriptValue.includes(prefix)) {
-            scriptValue = scriptValue
-              .replace(prefix + " ", "")
-              .replace(prefix, "");
-          }
-        }
-        packageJson.scripts[scriptKey] = scriptValue;
-      }
-    }
-
-    const newContent = JSON.stringify(packageJson, null, 2) + "\n";
-
-    return {
-      success: true,
-      filePath: packageJsonPath,
-      message: `Remove ${agent} server from dev script`,
-      originalContent,
-      newContent,
-    };
-  } catch {
-    return {
-      success: false,
-      filePath: packageJsonPath,
-      message: "Failed to parse package.json",
-    };
   }
 };
 
@@ -1609,10 +733,7 @@ export const previewCdnTransform = (
   }
   const originalContent = readFileSync(filePath, "utf-8");
   const newContent = originalContent
-    .replace(
-      /(https?:)?\/\/[^/\s"']+(?=\/(?:@?react-grab))/g,
-      `//${targetCdnDomain}`,
-    )
+    .replace(/(https?:)?\/\/[^/\s"']+(?=\/(?:@?react-grab))/g, `//${targetCdnDomain}`)
     .replace(
       /(https?:)?\/\/[^/\s"']*react-grab[^/\s"']*\.com(?=\/script\.js)/g,
       `//${targetCdnDomain}`,

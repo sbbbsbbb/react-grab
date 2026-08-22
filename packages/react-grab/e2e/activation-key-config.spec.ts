@@ -1,8 +1,6 @@
 import { test, expect } from "./fixtures.js";
 
 test.describe("Activation Key Configuration", () => {
-  test.describe.configure({ mode: "serial" });
-
   test.describe("Configuration via reinitialize", () => {
     test("should accept activationKey option", async ({ reactGrab }) => {
       await reactGrab.reinitialize({
@@ -22,9 +20,7 @@ test.describe("Activation Key Configuration", () => {
       expect(typeof state.isActive).toBe("boolean");
     });
 
-    test("should accept activationMode toggle option", async ({
-      reactGrab,
-    }) => {
+    test("should accept activationMode toggle option", async ({ reactGrab }) => {
       await reactGrab.reinitialize({
         activationKey: "g",
         activationMode: "toggle",
@@ -53,9 +49,7 @@ test.describe("Activation Key Configuration", () => {
       expect(typeof state.isActive).toBe("boolean");
     });
 
-    test("should accept allowActivationInsideInput option", async ({
-      reactGrab,
-    }) => {
+    test("should accept allowActivationInsideInput option", async ({ reactGrab }) => {
       await reactGrab.reinitialize({
         allowActivationInsideInput: true,
       });
@@ -105,16 +99,14 @@ test.describe("Activation Key Configuration", () => {
   test.describe("Selection with default config", () => {
     test("should show selection box", async ({ reactGrab }) => {
       await reactGrab.activate();
-      await reactGrab.hoverElement("[data-testid='todo-list'] h1");
-      await reactGrab.waitForSelectionBox();
+      await reactGrab.hoverUntilSelected("[data-testid='todo-list'] h1");
 
       expect(await reactGrab.isSelectionBoxVisible()).toBe(true);
     });
 
     test("should copy element", async ({ reactGrab }) => {
       await reactGrab.activate();
-      await reactGrab.hoverElement("[data-testid='todo-list'] h1");
-      await reactGrab.waitForSelectionBox();
+      await reactGrab.hoverUntilSelected("[data-testid='todo-list'] h1");
 
       await reactGrab.clickElement("[data-testid='todo-list'] h1");
       await reactGrab.page.waitForTimeout(500);
@@ -125,9 +117,7 @@ test.describe("Activation Key Configuration", () => {
   });
 
   test.describe("Dynamic option updates", () => {
-    test("should update activationKey via updateOptions", async ({
-      reactGrab,
-    }) => {
+    test("should update activationKey via updateOptions", async ({ reactGrab }) => {
       await reactGrab.updateOptions({
         activationKey: "k",
       });
@@ -136,9 +126,7 @@ test.describe("Activation Key Configuration", () => {
       expect(await reactGrab.isOverlayVisible()).toBe(true);
     });
 
-    test("should update activationMode via updateOptions", async ({
-      reactGrab,
-    }) => {
+    test("should update activationMode via updateOptions", async ({ reactGrab }) => {
       await reactGrab.updateOptions({
         activationMode: "hold",
       });
@@ -147,9 +135,7 @@ test.describe("Activation Key Configuration", () => {
       expect(await reactGrab.isOverlayVisible()).toBe(true);
     });
 
-    test("should update keyHoldDuration via updateOptions", async ({
-      reactGrab,
-    }) => {
+    test("should update keyHoldDuration via updateOptions", async ({ reactGrab }) => {
       await reactGrab.updateOptions({
         keyHoldDuration: 100,
       });
@@ -160,16 +146,12 @@ test.describe("Activation Key Configuration", () => {
   });
 
   test.describe("Keyboard activation with hold duration", () => {
-    test("should activate with default key after holding", async ({
-      reactGrab,
-    }) => {
+    test("should activate with default key after holding", async ({ reactGrab }) => {
       await reactGrab.activateViaKeyboard();
       expect(await reactGrab.isOverlayVisible()).toBe(true);
     });
 
-    test("should not activate without holding long enough", async ({
-      reactGrab,
-    }) => {
+    test("should not activate without holding long enough", async ({ reactGrab }) => {
       await reactGrab.page.click("body");
       await reactGrab.page.keyboard.down(reactGrab.modifierKey);
       await reactGrab.page.keyboard.down("c");
@@ -183,37 +165,22 @@ test.describe("Activation Key Configuration", () => {
 
   test.describe("Input field interaction", () => {
     test("should activate in input by default", async ({ reactGrab }) => {
-      await reactGrab.page.click("[data-testid='test-input']");
-
-      await reactGrab.page.keyboard.down(reactGrab.modifierKey);
-      await reactGrab.page.keyboard.down("c");
-      await reactGrab.page.waitForTimeout(500);
-      await reactGrab.page.keyboard.up("c");
-      await reactGrab.page.keyboard.up(reactGrab.modifierKey);
-
-      await expect
-        .poll(() => reactGrab.isOverlayVisible(), { timeout: 1000 })
-        .toBe(true);
+      await reactGrab.activateViaKeyboardFrom("[data-testid='test-input']");
+      expect(await reactGrab.isOverlayVisible()).toBe(true);
     });
 
-    test("should not activate in input when disabled", async ({
-      reactGrab,
-    }) => {
+    test("should not activate in input when disabled", async ({ reactGrab }) => {
       await reactGrab.reinitialize({ allowActivationInsideInput: false });
       await reactGrab.page.click("[data-testid='test-input']");
 
       await reactGrab.page.keyboard.down(reactGrab.modifierKey);
       await reactGrab.page.keyboard.down("c");
-      await expect
-        .poll(() => reactGrab.isOverlayVisible(), { timeout: 2000 })
-        .toBe(false);
+      await expect.poll(() => reactGrab.isOverlayVisible(), { timeout: 2000 }).toBe(false);
       await reactGrab.page.keyboard.up("c");
       await reactGrab.page.keyboard.up(reactGrab.modifierKey);
     });
 
-    test("should activate outside input after clicking away", async ({
-      reactGrab,
-    }) => {
+    test("should activate outside input after clicking away", async ({ reactGrab }) => {
       await reactGrab.page.click("[data-testid='test-input']");
       await reactGrab.page.click("body", { position: { x: 10, y: 10 } });
 
@@ -223,9 +190,7 @@ test.describe("Activation Key Configuration", () => {
   });
 
   test.describe("State persistence", () => {
-    test("should maintain activation state after viewport resize", async ({
-      reactGrab,
-    }) => {
+    test("should maintain activation state after viewport resize", async ({ reactGrab }) => {
       await reactGrab.activate();
       expect(await reactGrab.isOverlayVisible()).toBe(true);
 
@@ -235,9 +200,7 @@ test.describe("Activation Key Configuration", () => {
       await reactGrab.setViewportSize(1280, 720);
     });
 
-    test("should maintain activation state after scroll", async ({
-      reactGrab,
-    }) => {
+    test("should maintain activation state after scroll", async ({ reactGrab }) => {
       await reactGrab.activate();
       expect(await reactGrab.isOverlayVisible()).toBe(true);
 

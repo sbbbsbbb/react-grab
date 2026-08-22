@@ -1,5 +1,197 @@
 # @react-grab/cli
 
+## 0.2.0
+
+### Minor Changes
+
+- f350003: Remove the Style action and panel, including its keyboard shortcuts, inline previews, CSS property controls, design-token handling, and edit-related action context and renderer types. Simplify the toolbar to its Copy control while keeping Comment available through the context menu and action menu.
+
+## 0.1.50
+
+## 0.1.49
+
+## 0.1.48
+
+## 0.1.47
+
+## 0.1.46
+
+## 0.1.45
+
+## 0.1.44
+
+### Patch Changes
+
+- 816db46: Add a confirmation prompt before showing the skill agent-selection view during install.
+
+## 0.1.43
+
+### Patch Changes
+
+- d930036: Set up automated npm releases via GitHub Actions using trusted publishing (OIDC).
+
+## 0.1.42
+
+### Patch Changes
+
+- fix
+
+## 0.1.41
+
+### Patch Changes
+
+- fix
+
+## 0.1.40
+
+### Patch Changes
+
+- fix
+
+## 0.1.39
+
+### Patch Changes
+
+- fix: issues with style
+
+## 0.1.38
+
+### Patch Changes
+
+- add style feature
+
+## 0.1.37
+
+### Patch Changes
+
+- fix
+
+## 0.1.36
+
+### Patch Changes
+
+- fix hanging issue
+
+## 0.1.35
+
+### Patch Changes
+
+- ui improvement
+
+## 0.1.34
+
+### Patch Changes
+
+- fix
+
+## 0.1.33
+
+### Patch Changes
+
+- fix
+
+## 0.1.32
+
+### Patch Changes
+
+- fix: perf issues
+
+## 0.1.31
+
+### Patch Changes
+
+- fix: solidjs not bundling
+
+## 0.1.30
+
+### Patch Changes
+
+- fix
+
+## 0.1.29
+
+### Patch Changes
+
+- cleanup toolbar
+
+## 0.1.28
+
+### Patch Changes
+
+- fix
+
+## 0.1.27
+
+### Patch Changes
+
+- fix: install instructions
+
+## 0.1.26
+
+### Patch Changes
+
+- fix: minor tweaks
+
+## 0.1.25
+
+### Patch Changes
+
+- fix: primtiives
+
+## 0.1.24
+
+### Patch Changes
+
+- primitives
+
+## 0.1.23
+
+### Patch Changes
+
+- fix: npx command
+
+## 0.1.22
+
+### Patch Changes
+
+- fix: freezing
+
+## 0.1.21
+
+### Patch Changes
+
+- fix: up and down selection
+
+## 0.1.20
+
+### Patch Changes
+
+- fix: selection performacne
+
+## 0.1.19
+
+### Patch Changes
+
+- fix: gsap
+
+## 0.1.18
+
+### Patch Changes
+
+- fix: minor issues
+
+## 0.1.17
+
+### Patch Changes
+
+- fix: mcp
+
+## 0.1.16
+
+### Patch Changes
+
+- fix: environment detection
+
 ## 0.1.15
 
 ### Patch Changes

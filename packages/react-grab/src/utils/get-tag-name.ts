@@ -1,2 +1,4 @@
+import { getElementAdapter } from "../core/element-adapter.js";
+
 export const getTagName = (element: Element): string =>
-  (element.tagName || "").toLowerCase();
+  getElementAdapter(element)?.getTagName() ?? (element.tagName || "").toLowerCase();

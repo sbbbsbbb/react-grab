@@ -1,40 +1,52 @@
 import {
-  Show,
-  For,
-  createSignal,
   createEffect,
   createMemo,
-  onMount,
+  createSignal,
+  on,
   onCleanup,
+  onMount,
+  Show,
+  type Component,
 } from "solid-js";
-import type { Component } from "solid-js";
 import type { ArrowPosition, SelectionLabelProps } from "../../types.js";
 import {
-  DEFERRED_EXECUTION_DELAY_MS,
-  IME_COMPOSING_KEY_CODE,
+  FADE_DURATION_MS,
+  PANEL_SHADOW,
   VIEWPORT_MARGIN_PX,
   ARROW_CENTER_PERCENT,
   ARROW_LABEL_MARGIN_PX,
   LABEL_GAP_PX,
-  PANEL_STYLES,
   SELECTION_LABEL_OFFSCREEN_PX,
+  TEXTAREA_MAX_HEIGHT_PX,
+  Z_INDEX_OVERLAY,
 } from "../../constants.js";
+import { autoResizeTextarea } from "../../utils/auto-resize-textarea.js";
+import { focusInOverlay } from "../../utils/focus-in-overlay.js";
 import { getArrowSize } from "../../utils/get-arrow-size.js";
-import { isKeyboardEventTriggeredByInput } from "../../utils/is-keyboard-event-triggered-by-input.js";
+import { getVisualViewport } from "../../utils/get-visual-viewport.js";
+import { isKeyboardEventComposing } from "../../utils/is-keyboard-event-composing.js";
+import { getScopeContainer } from "../../utils/runtime-mode.js";
 import { cn } from "../../utils/cn.js";
 import { getTagDisplay } from "../../utils/get-tag-display.js";
-import { formatShortcut } from "../../utils/format-shortcut.js";
-import { IconReply } from "../icons/icon-reply.jsx";
 import { IconSubmit } from "../icons/icon-submit.jsx";
 import { IconLoader } from "../icons/icon-loader.jsx";
 import { Arrow } from "./arrow.js";
 import { TagBadge } from "./tag-badge.js";
 import { BottomSection } from "./bottom-section.js";
+import { Surface } from "../ui/surface.js";
 import { DiscardPrompt } from "./discard-prompt.js";
 import { ErrorView } from "./error-view.js";
 import { CompletionView } from "./completion-view.js";
 
-const DEFAULT_OFFSCREEN_POSITION = {
+interface LabelPosition {
+  left: number;
+  top: number;
+  arrowLeftPercent: number;
+  arrowLeftOffset: number;
+  edgeOffsetX: number;
+}
+
+const DEFAULT_OFFSCREEN_POSITION: LabelPosition = {
   left: SELECTION_LABEL_OFFSCREEN_PX,
   top: SELECTION_LABEL_OFFSCREEN_PX,
   arrowLeftPercent: ARROW_CENTER_PERCENT,
@@ -42,28 +54,25 @@ const DEFAULT_OFFSCREEN_POSITION = {
   edgeOffsetX: 0,
 };
 
+interface PositionResult {
+  position: LabelPosition;
+  computedArrowPosition: ArrowPosition | null;
+  hadValidBounds: boolean;
+  elementIdentity: string;
+}
+
 export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
   let containerRef: HTMLDivElement | undefined;
   let panelRef: HTMLDivElement | undefined;
   let inputRef: HTMLTextAreaElement | undefined;
   let isTagCurrentlyHovered = false;
-  let lastValidPosition: {
-    left: number;
-    top: number;
-    arrowLeftPercent: number;
-    arrowLeftOffset: number;
-    edgeOffsetX: number;
-  } | null = null;
-  let lastElementIdentity: string | null = null;
 
   const [measuredWidth, setMeasuredWidth] = createSignal(0);
   const [measuredHeight, setMeasuredHeight] = createSignal(0);
   const [panelWidth, setPanelWidth] = createSignal(0);
-  const [arrowPosition, setArrowPosition] =
-    createSignal<ArrowPosition>("bottom");
   const [viewportVersion, setViewportVersion] = createSignal(0);
-  const [hadValidBounds, setHadValidBounds] = createSignal(false);
   const [isInternalFading, setIsInternalFading] = createSignal(false);
+  const [isShaking, setIsShaking] = createSignal(false);
 
   const canInteract = () =>
     props.status !== "copying" &&
@@ -71,34 +80,21 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     props.status !== "fading" &&
     props.status !== "error";
 
-  const isCompletedStatus = () =>
-    props.status === "copied" || props.status === "fading";
+  const isCompletedStatus = () => props.status === "copied" || props.status === "fading";
 
   const shouldEnablePointerEvents = (): boolean => {
     if (props.isPromptMode) return true;
+    if (props.discardPrompt) return true;
     if (isCompletedStatus() && (props.onDismiss || props.onShowContextMenu)) {
       return true;
     }
-    if (props.status === "copying" && props.onAbort) return true;
-    if (
-      props.status === "error" &&
-      (props.onAcknowledgeError || props.onRetry)
-    ) {
+    if (props.status === "error" && (props.onAcknowledgeError || props.onRetry)) {
       return true;
     }
     return false;
   };
 
-  const measureContainer = () => {
-    if (containerRef && !isTagCurrentlyHovered) {
-      const rect = containerRef.getBoundingClientRect();
-      setMeasuredWidth(rect.width);
-      setMeasuredHeight(rect.height);
-    }
-    if (panelRef) {
-      setPanelWidth(panelRef.getBoundingClientRect().width);
-    }
-  };
+  let resizeObserver: ResizeObserver | undefined;
 
   const handleTagHoverChange = (hovered: boolean) => {
     isTagCurrentlyHovered = hovered;
@@ -108,209 +104,194 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     setViewportVersion((version) => version + 1);
   };
 
-  const handleGlobalKeyDown = (event: KeyboardEvent) => {
-    if (isKeyboardEventTriggeredByInput(event)) return;
-
-    const isEnterToExpand =
-      event.code === "Enter" && !props.isPromptMode && canInteract();
-    const isCtrlCToAbort =
-      event.code === "KeyC" &&
-      event.ctrlKey &&
-      props.status === "copying" &&
-      props.onAbort;
-
-    if (isEnterToExpand) {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      props.onToggleExpand?.();
-    } else if (isCtrlCToAbort) {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      props.onAbort?.();
-    }
-  };
-
   onMount(() => {
-    measureContainer();
+    const scopeContainer = getScopeContainer();
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const rect = entry.target.getBoundingClientRect();
+        // Updates are skipped during tag hover to prevent a feedback loop
+        // where hover changes the size, the size shifts the position, and the
+        // shifted position changes what the cursor is over.
+        if (entry.target === containerRef && !isTagCurrentlyHovered) {
+          setMeasuredWidth(rect.width);
+          setMeasuredHeight(rect.height);
+        } else if (entry.target === panelRef) {
+          setPanelWidth(rect.width);
+        } else if (entry.target === scopeContainer) {
+          // Scoped instances clamp to the container's box, so its resizes must
+          // invalidate the position like a window resize does.
+          handleViewportChange();
+        }
+      }
+    });
+    if (scopeContainer) resizeObserver.observe(scopeContainer);
+    if (containerRef) {
+      const rect = containerRef.getBoundingClientRect();
+      setMeasuredWidth(rect.width);
+      setMeasuredHeight(rect.height);
+      resizeObserver.observe(containerRef);
+    }
+    if (panelRef) {
+      setPanelWidth(panelRef.getBoundingClientRect().width);
+      resizeObserver.observe(panelRef);
+    }
     window.addEventListener("scroll", handleViewportChange, true);
     window.addEventListener("resize", handleViewportChange);
-    window.addEventListener("keydown", handleGlobalKeyDown, { capture: true });
+    window.visualViewport?.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("scroll", handleViewportChange);
   });
 
   onCleanup(() => {
+    resizeObserver?.disconnect();
     window.removeEventListener("scroll", handleViewportChange, true);
     window.removeEventListener("resize", handleViewportChange);
-    window.removeEventListener("keydown", handleGlobalKeyDown, {
-      capture: true,
-    });
+    window.visualViewport?.removeEventListener("resize", handleViewportChange);
+    window.visualViewport?.removeEventListener("scroll", handleViewportChange);
   });
 
-  createEffect(() => {
-    const elementIdentity = `${props.tagName ?? ""}:${props.componentName ?? ""}`;
-    if (elementIdentity !== lastElementIdentity) {
-      lastElementIdentity = elementIdentity;
-      lastValidPosition = null;
-    }
-  });
+  const elementIdentity = () => `${props.tagName ?? ""}:${props.componentName ?? ""}`;
 
-  const sizeAffectingSignature = createMemo(() => [
-    props.tagName,
-    props.componentName,
-    props.elementsCount,
-    props.statusText,
-    props.inputValue,
-    props.hasAgent,
-    props.isPromptMode,
-    props.isPendingDismiss,
-    props.error,
-    props.isPendingAbort,
-    props.visible,
-    props.status,
-    props.actionCycleState?.items,
-    props.actionCycleState?.activeIndex,
-    props.actionCycleState?.isVisible,
-  ]);
+  // This reducer-style memo preserves position state across reactive updates,
+  // resetting to offscreen on element identity change and keeping the last
+  // good position when measurements briefly fail (via hadValidBounds). It
+  // replaces an earlier anti-pattern of deriving state via effects.
+  // @see https://github.com/aidenybai/react-grab/pull/245
+  const positionComputation = createMemo(
+    (previousResult: PositionResult): PositionResult => {
+      viewportVersion();
+      const currentElementIdentity = elementIdentity();
+      const didReset = currentElementIdentity !== previousResult.elementIdentity;
+      const cached: PositionResult = didReset
+        ? {
+            position: DEFAULT_OFFSCREEN_POSITION,
+            computedArrowPosition: null,
+            hadValidBounds: false,
+            elementIdentity: currentElementIdentity,
+          }
+        : previousResult;
 
-  createEffect(() => {
-    // HACK: Trigger measurement when content that affects size changes.
-    // Solid's fine-grained reactivity means we do not re-render the entire
-    // component on every prop change. Label positioning depends on measured
-    // width/height for centering, and width/height depends on rendered content.
-    // We therefore force a re-measure whenever any size-affecting input changes.
-    // Without this, switching from a short tag to a long component name can keep
-    // stale width and offset the label incorrectly.
-    void sizeAffectingSignature();
-    queueMicrotask(measureContainer);
-  });
+      const bounds = props.selectionBounds;
+      const labelWidth = measuredWidth();
+      const labelHeight = measuredHeight();
+      const hasMeasurements = labelWidth > 0 && labelHeight > 0;
+      const hasValidBounds = bounds && bounds.width > 0 && bounds.height > 0;
 
-  createEffect(() => {
-    if (props.isPromptMode && inputRef && props.onSubmit) {
-      // HACK: Defer focus one tick so the textarea is fully mounted.
-      const focusTimeout = setTimeout(() => {
-        inputRef?.focus();
-      }, DEFERRED_EXECUTION_DELAY_MS);
-      onCleanup(() => {
-        clearTimeout(focusTimeout);
-      });
-    }
-  });
+      if (!hasMeasurements || !hasValidBounds) {
+        return {
+          position: cached.hadValidBounds ? cached.position : DEFAULT_OFFSCREEN_POSITION,
+          computedArrowPosition: cached.computedArrowPosition,
+          hadValidBounds: cached.hadValidBounds,
+          elementIdentity: currentElementIdentity,
+        };
+      }
 
-  const positionComputation = createMemo(() => {
-    viewportVersion();
+      // Scope-aware: inside a scoped instance (demo showcases) the container's
+      // box is the viewport, so the label stays within the showcase card
+      // instead of spilling over the host page.
+      const viewport = getVisualViewport();
+      const viewportLeft = viewport.offsetLeft;
+      const viewportTop = viewport.offsetTop;
+      const viewportRight = viewportLeft + viewport.width;
+      const viewportBottom = viewportTop + viewport.height;
 
-    const bounds = props.selectionBounds;
-    const labelWidth = measuredWidth();
-    const labelHeight = measuredHeight();
-    const hasMeasurements = labelWidth > 0 && labelHeight > 0;
-    const hasValidBounds = bounds && bounds.width > 0 && bounds.height > 0;
+      const isSelectionVisibleInViewport =
+        bounds.x + bounds.width > viewportLeft &&
+        bounds.x < viewportRight &&
+        bounds.y + bounds.height > viewportTop &&
+        bounds.y < viewportBottom;
 
-    if (!hasMeasurements || !hasValidBounds) {
-      return {
-        position: lastValidPosition ?? DEFAULT_OFFSCREEN_POSITION,
-        computedArrowPosition: null,
-      };
-    }
+      if (!isSelectionVisibleInViewport) {
+        return {
+          position: DEFAULT_OFFSCREEN_POSITION,
+          computedArrowPosition: cached.computedArrowPosition,
+          hadValidBounds: cached.hadValidBounds,
+          elementIdentity: currentElementIdentity,
+        };
+      }
 
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
+      const selectionCenterX = bounds.x + bounds.width / 2;
+      const cursorX = props.mouseX ?? selectionCenterX;
+      const selectionBottom = bounds.y + bounds.height;
+      const selectionTop = bounds.y;
 
-    const isSelectionVisibleInViewport =
-      bounds.x + bounds.width > 0 &&
-      bounds.x < viewportWidth &&
-      bounds.y + bounds.height > 0 &&
-      bounds.y < viewportHeight;
+      const actualArrowHeight = props.hideArrow ? 0 : getArrowSize(panelWidth());
 
-    if (!isSelectionVisibleInViewport) {
-      return {
-        position: DEFAULT_OFFSCREEN_POSITION,
-        computedArrowPosition: null,
-      };
-    }
+      // The label is cursor-anchored: left stays at cursorX and
+      // translateX(-50%) handles centering, so width changes from component
+      // name resolution or status updates never shift the anchor point.
+      // When the label would overflow the viewport, edgeOffsetX is added to
+      // the transform to push it back on-screen without moving left.
+      const anchorX = cursorX;
+      let edgeOffsetX = 0;
+      let positionTop = selectionBottom + actualArrowHeight + LABEL_GAP_PX;
 
-    const selectionCenterX = bounds.x + bounds.width / 2;
-    const cursorX = props.mouseX ?? selectionCenterX;
-    const selectionBottom = bounds.y + bounds.height;
-    const selectionTop = bounds.y;
-
-    const actualArrowHeight = props.hideArrow ? 0 : getArrowSize(panelWidth());
-
-    // HACK: Use cursorX as anchor point, CSS transform handles centering via translateX(-50%)
-    // This avoids the flicker when content changes because centering doesn't depend on JS measurement
-    const anchorX = cursorX;
-    let edgeOffsetX = 0;
-    let positionTop = selectionBottom + actualArrowHeight + LABEL_GAP_PX;
-
-    if (labelWidth > 0) {
       const labelLeft = anchorX - labelWidth / 2;
       const labelRight = anchorX + labelWidth / 2;
 
-      if (labelRight > viewportWidth - VIEWPORT_MARGIN_PX) {
-        edgeOffsetX = viewportWidth - VIEWPORT_MARGIN_PX - labelRight;
+      if (labelRight > viewportRight - VIEWPORT_MARGIN_PX) {
+        edgeOffsetX = viewportRight - VIEWPORT_MARGIN_PX - labelRight;
       }
-      if (labelLeft + edgeOffsetX < VIEWPORT_MARGIN_PX) {
-        edgeOffsetX = VIEWPORT_MARGIN_PX - labelLeft;
+      if (labelLeft + edgeOffsetX < viewportLeft + VIEWPORT_MARGIN_PX) {
+        edgeOffsetX = viewportLeft + VIEWPORT_MARGIN_PX - labelLeft;
       }
-    }
 
-    const totalHeightNeeded = labelHeight + actualArrowHeight + LABEL_GAP_PX;
-    const fitsBelow =
-      positionTop + labelHeight <= viewportHeight - VIEWPORT_MARGIN_PX;
+      const totalHeightNeeded = labelHeight + actualArrowHeight + LABEL_GAP_PX;
+      const fitsBelow = positionTop + labelHeight <= viewportBottom - VIEWPORT_MARGIN_PX;
 
-    if (!fitsBelow) {
-      positionTop = selectionTop - totalHeightNeeded;
-    }
+      if (!fitsBelow) {
+        positionTop = selectionTop - totalHeightNeeded;
+      }
 
-    if (positionTop < VIEWPORT_MARGIN_PX) {
-      positionTop = VIEWPORT_MARGIN_PX;
-    }
+      if (positionTop < viewportTop + VIEWPORT_MARGIN_PX) {
+        positionTop = viewportTop + VIEWPORT_MARGIN_PX;
+      }
 
-    const arrowLeftPercent = ARROW_CENTER_PERCENT;
-    const labelHalfWidth = labelWidth / 2;
-    const arrowCenterPx = labelHalfWidth - edgeOffsetX;
-    const arrowMinPx = Math.min(ARROW_LABEL_MARGIN_PX, labelHalfWidth);
-    const arrowMaxPx = Math.max(
-      labelWidth - ARROW_LABEL_MARGIN_PX,
-      labelHalfWidth,
-    );
-    const clampedArrowCenterPx = Math.max(
-      arrowMinPx,
-      Math.min(arrowMaxPx, arrowCenterPx),
-    );
-    const arrowLeftOffset = clampedArrowCenterPx - labelHalfWidth;
+      const labelHalfWidth = labelWidth / 2;
+      const arrowCenterPx = labelHalfWidth - edgeOffsetX;
+      const arrowMinPx = Math.min(ARROW_LABEL_MARGIN_PX, labelHalfWidth);
+      const arrowMaxPx = Math.max(labelWidth - ARROW_LABEL_MARGIN_PX, labelHalfWidth);
+      const clampedArrowCenterPx = Math.max(arrowMinPx, Math.min(arrowMaxPx, arrowCenterPx));
+      const arrowLeftOffset = clampedArrowCenterPx - labelHalfWidth;
 
-    const computedArrowPosition: ArrowPosition = fitsBelow ? "bottom" : "top";
+      const computedArrowPosition: ArrowPosition = fitsBelow ? "bottom" : "top";
 
-    return {
-      position: {
-        left: anchorX,
-        top: positionTop,
-        arrowLeftPercent,
-        arrowLeftOffset,
-        edgeOffsetX,
-      },
-      computedArrowPosition,
-    };
-  });
+      return {
+        position: {
+          left: anchorX,
+          top: positionTop,
+          arrowLeftPercent: ARROW_CENTER_PERCENT,
+          arrowLeftOffset,
+          edgeOffsetX,
+        },
+        computedArrowPosition,
+        hadValidBounds: true,
+        elementIdentity: currentElementIdentity,
+      };
+    },
+    {
+      position: DEFAULT_OFFSCREEN_POSITION,
+      computedArrowPosition: null,
+      hadValidBounds: false,
+      elementIdentity: "",
+    } satisfies PositionResult,
+  );
 
-  const computedPosition = () => positionComputation().position;
+  const arrowPosition = () => positionComputation().computedArrowPosition ?? "bottom";
+  const hadValidBounds = () => positionComputation().hadValidBounds;
 
-  createEffect(() => {
-    const result = positionComputation();
-    if (result.computedArrowPosition !== null) {
-      lastValidPosition = result.position;
-      setHadValidBounds(true);
-      setArrowPosition(result.computedArrowPosition);
-    }
-  });
+  createEffect(
+    on(
+      () => props.selectionLabelShakeCount,
+      () => setIsShaking(true),
+      { defer: true },
+    ),
+  );
 
   const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.isComposing || event.keyCode === IME_COMPOSING_KEY_CODE) {
+    if (isKeyboardEventComposing(event)) {
       return;
     }
 
-    event.stopPropagation();
     event.stopImmediatePropagation();
 
     const isEnterWithoutShift = event.code === "Enter" && !event.shiftKey;
@@ -330,6 +311,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     if (!(inputTarget instanceof HTMLTextAreaElement)) {
       return;
     }
+    autoResizeTextarea(inputTarget, TEXTAREA_MAX_HEIGHT_PX);
     props.onInputChange?.(inputTarget.value);
   };
 
@@ -340,32 +322,25 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
       elementsCount: props.elementsCount,
     });
 
-  const tagDisplay = () => tagDisplayResult().tagName;
-  const componentNameDisplay = () => tagDisplayResult().componentName;
-  const actionCycleItems = () => props.actionCycleState?.items ?? [];
-  const actionCycleActiveIndex = () => props.actionCycleState?.activeIndex ?? 0;
-  const isActionCycleVisible = () => Boolean(props.actionCycleState?.isVisible);
+  const isSinglePanelLine = createMemo(() => {
+    if (props.error || props.discardPrompt) return false;
+    if (canInteract() && props.isPromptMode) return false;
+    return true;
+  });
 
   const handleTagClick = (event: MouseEvent) => {
-    event.stopPropagation();
     event.stopImmediatePropagation();
     if (props.filePath && props.onOpen) {
       props.onOpen();
     }
   };
 
-  const isTagClickable = () => Boolean(props.filePath && props.onOpen);
-
   const handleContainerPointerDown = (event: PointerEvent) => {
-    event.stopPropagation();
     event.stopImmediatePropagation();
     const isEditableInputVisible =
-      canInteract() &&
-      props.isPromptMode &&
-      !props.isPendingDismiss &&
-      props.onSubmit;
+      canInteract() && props.isPromptMode && !props.discardPrompt && props.onSubmit;
     if (isEditableInputVisible && inputRef) {
-      inputRef.focus();
+      focusInOverlay(inputRef, { preventScroll: true });
     }
   };
 
@@ -373,30 +348,24 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
     hadValidBounds() && (isCompletedStatus() || props.status === "error");
 
   return (
-    <Show
-      when={
-        props.visible !== false &&
-        (props.selectionBounds || shouldPersistDuringFade())
-      }
-    >
+    <Show when={props.visible !== false && (props.selectionBounds || shouldPersistDuringFade())}>
       <div
         ref={containerRef}
         data-react-grab-ignore-events
         data-react-grab-selection-label
-        class={cn(
-          "fixed font-sans text-[13px] antialiased filter-[drop-shadow(0px_1px_2px_#51515140)] select-none transition-opacity duration-100 ease-out",
-        )}
+        class="fixed font-sans text-[13px] antialiased select-none"
         style={{
-          top: `${computedPosition().top}px`,
-          left: `${computedPosition().left}px`,
-          transform: `translateX(calc(-50% + ${computedPosition().edgeOffsetX}px))`,
-          "z-index": "2147483647",
+          top: `${positionComputation().position.top}px`,
+          left: `${positionComputation().position.left}px`,
+          transform: `translateX(calc(-50% + ${positionComputation().position.edgeOffsetX}px))`,
+          "z-index": `${Z_INDEX_OVERLAY}`,
           "pointer-events": shouldEnablePointerEvents() ? "auto" : "none",
+          transition: `opacity ${FADE_DURATION_MS}ms ease-out, filter ${FADE_DURATION_MS}ms ease-out`,
           opacity: props.status === "fading" || isInternalFading() ? 0 : 1,
+          filter: `drop-shadow(${PANEL_SHADOW}) blur(${props.status === "fading" || isInternalFading() ? "3px" : "0"})`,
         }}
         onPointerDown={handleContainerPointerDown}
         onClick={(event) => {
-          event.stopPropagation();
           event.stopImmediatePropagation();
         }}
         onMouseEnter={() => props.onHoverChange?.(true)}
@@ -405,183 +374,92 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
         <Show when={!props.hideArrow}>
           <Arrow
             position={arrowPosition()}
-            leftPercent={computedPosition().arrowLeftPercent}
-            leftOffsetPx={computedPosition().arrowLeftOffset}
+            leftPercent={positionComputation().position.arrowLeftPercent}
+            leftOffsetPx={positionComputation().position.arrowLeftOffset}
             labelWidth={panelWidth()}
           />
         </Show>
 
         <Show when={isCompletedStatus() && !props.error}>
           <CompletionView
-            statusText={
-              props.hasAgent ? (props.statusText ?? "Completed") : "Copied"
-            }
-            supportsUndo={props.supportsUndo}
-            supportsFollowUp={props.supportsFollowUp}
-            dismissButtonText={props.dismissButtonText}
-            previousPrompt={props.previousPrompt}
+            statusText={props.statusText ?? "Copied"}
             onDismiss={props.onDismiss}
-            onUndo={props.onUndo}
-            onFollowUpSubmit={props.onFollowUpSubmit}
-            onCopyStateChange={() => {
-              queueMicrotask(measureContainer);
-            }}
             onFadingChange={setIsInternalFading}
             onShowContextMenu={props.onShowContextMenu}
           />
         </Show>
 
-        <div
-          ref={panelRef}
-          class={cn(
-            "contain-layout flex items-center gap-[5px] rounded-[10px] antialiased w-fit h-fit p-0 [font-synthesis:none] [corner-shape:superellipse(1.25)]",
-            PANEL_STYLES,
-          )}
+        <Surface
+          ref={(element) => (panelRef = element)}
+          shape={isSinglePanelLine() ? "pill" : "panel"}
+          class={cn("flex items-center gap-[5px] w-fit h-fit p-0", isShaking() && "animate-shake")}
           style={{
             display: isCompletedStatus() && !props.error ? "none" : undefined,
           }}
+          onAnimationEnd={() => setIsShaking(false)}
         >
-          <Show when={props.status === "copying" && !props.isPendingAbort}>
-            <div
-              class="contain-layout shrink-0 flex flex-col justify-center items-start w-fit h-fit max-w-[280px]"
-              classList={{
-                "min-w-[150px]": Boolean(props.hasAgent && props.inputValue),
-              }}
-            >
+          <Show when={props.status === "copying"}>
+            <div class="contain-layout shrink-0 flex flex-col justify-center items-start w-fit h-fit max-w-[280px]">
               <div class="contain-layout shrink-0 flex items-center gap-1 py-1.5 px-2 w-full h-fit">
-                <IconLoader size={13} class="text-[#71717a] shrink-0" />
-                <span class="shimmer-text text-[13px] leading-4 font-sans font-medium h-fit tabular-nums overflow-hidden text-ellipsis whitespace-nowrap">
-                  {props.statusText ?? "Grabbing…"}
-                </span>
+                <IconLoader size={13} class="text-[var(--rg-text-secondary)] shrink-0" />
+                <span
+                  class="shimmer-text text-[13px] leading-4 font-sans font-medium h-fit tabular-nums overflow-hidden text-ellipsis whitespace-nowrap"
+                  textContent={props.statusText ?? "Grabbing…"}
+                />
               </div>
-              <Show when={props.hasAgent && props.inputValue}>
-                <BottomSection>
-                  <div class="shrink-0 flex justify-between items-end w-full min-h-4">
-                    <textarea
-                      ref={inputRef}
-                      data-react-grab-ignore-events
-                      class="text-black text-[13px] leading-4 font-medium bg-transparent border-none outline-none resize-none flex-1 p-0 m-0 opacity-50 wrap-break-word overflow-y-auto"
-                      style={{
-                        "field-sizing": "content",
-                        "min-height": "16px",
-                        "max-height": "95px",
-                        "scrollbar-width": "none",
-                      }}
-                      value={props.inputValue ?? ""}
-                      placeholder="Add context"
-                      rows={1}
-                      disabled
-                    />
-                    <Show when={props.onAbort}>
-                      <button
-                        data-react-grab-ignore-events
-                        data-react-grab-abort
-                        class="contain-layout shrink-0 flex items-center justify-center size-4 rounded-full bg-black cursor-pointer ml-1 interactive-scale"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          props.onAbort?.();
-                        }}
-                      >
-                        <div class="size-1.5 bg-white rounded-[1px]" />
-                      </button>
-                    </Show>
-                  </div>
-                </BottomSection>
-              </Show>
             </div>
           </Show>
 
-          <Show when={props.status === "copying" && props.isPendingAbort}>
-            <DiscardPrompt
-              onConfirm={props.onConfirmAbort}
-              onCancel={props.onCancelAbort}
-            />
-          </Show>
-
-          <Show when={canInteract() && !props.isPromptMode}>
+          <Show when={canInteract() && !props.isPromptMode && !props.discardPrompt}>
             <div class="contain-layout shrink-0 flex flex-col items-start w-fit h-fit">
-              <div class="contain-layout shrink-0 flex items-center gap-1 py-1.5 w-fit h-fit px-2">
+              <div class="contain-layout shrink-0 flex items-center gap-1 w-fit h-fit px-2 py-1.5">
                 <TagBadge
-                  tagName={tagDisplay()}
-                  componentName={componentNameDisplay()}
-                  isClickable={isTagClickable()}
+                  tagName={tagDisplayResult().tagName}
+                  componentName={tagDisplayResult().componentName}
+                  isClickable={Boolean(props.filePath && props.onOpen)}
                   onClick={handleTagClick}
                   onHoverChange={handleTagHoverChange}
                   shrink
-                  forceShowIcon={Boolean(props.isContextMenuOpen)}
                 />
               </div>
-              <Show when={isActionCycleVisible()}>
-                <BottomSection>
-                  <div class="flex flex-col w-[calc(100%+16px)] -mx-2 -my-1.5">
-                    <For each={actionCycleItems()}>
-                      {(item, itemIndex) => (
-                        <div
-                          data-react-grab-action-cycle-item={item.label.toLowerCase()}
-                          class="contain-layout flex items-center justify-between w-full px-2 py-1 transition-colors"
-                          classList={{
-                            "bg-black/5":
-                              itemIndex() === actionCycleActiveIndex(),
-                            "rounded-b-[6px]":
-                              itemIndex() === actionCycleItems().length - 1,
-                          }}
-                        >
-                          <span class="text-[13px] leading-4 font-sans font-medium text-black">
-                            {item.label}
-                          </span>
-                          <Show when={item.shortcut}>
-                            <span class="text-[11px] font-sans text-black/50 ml-4">
-                              {formatShortcut(item.shortcut!)}
-                            </span>
-                          </Show>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </BottomSection>
-              </Show>
             </div>
           </Show>
 
-          <Show
-            when={
-              canInteract() && props.isPromptMode && !props.isPendingDismiss
-            }
-          >
+          <Show when={canInteract() && props.isPromptMode && !props.discardPrompt}>
             <div class="contain-layout shrink-0 flex flex-col justify-center items-start w-fit h-fit min-w-[150px] max-w-[280px]">
               <div class="contain-layout shrink-0 flex items-center gap-1 pt-1.5 pb-1 w-fit h-fit px-2 max-w-full">
                 <TagBadge
-                  tagName={tagDisplay()}
-                  componentName={componentNameDisplay()}
-                  isClickable={isTagClickable()}
+                  tagName={tagDisplayResult().tagName}
+                  componentName={tagDisplayResult().componentName}
+                  isClickable={Boolean(props.filePath && props.onOpen)}
                   onClick={handleTagClick}
                   onHoverChange={handleTagHoverChange}
-                  forceShowIcon
                 />
               </div>
               <BottomSection>
-                <Show when={props.replyToPrompt}>
-                  <div class="flex items-center gap-1 w-full mb-1 overflow-hidden">
-                    <IconReply size={10} class="text-black/30 shrink-0" />
-                    <span class="text-black/40 text-[11px] leading-3 font-medium truncate italic">
-                      {props.replyToPrompt}
-                    </span>
-                  </div>
-                </Show>
-                <div
-                  class="shrink-0 flex justify-between items-end w-full min-h-4"
-                  style={{ "padding-left": props.replyToPrompt ? "14px" : "0" }}
-                >
+                <div class="shrink-0 flex justify-between items-end w-full min-h-4">
                   <textarea
-                    ref={inputRef}
+                    ref={(element) => {
+                      inputRef = element;
+                      // This ref fires during Solid's render commit when the
+                      // surrounding DOM tree isn't fully built yet, so focusing
+                      // synchronously can fail or cause a scroll jump.
+                      if (props.onSubmit) {
+                        queueMicrotask(() => {
+                          focusInOverlay(element, { preventScroll: true });
+                          autoResizeTextarea(element, TEXTAREA_MAX_HEIGHT_PX);
+                        });
+                      }
+                    }}
                     data-react-grab-ignore-events
                     data-react-grab-input
-                    class="text-black text-[13px] leading-4 font-medium bg-transparent border-none outline-none resize-none flex-1 p-0 m-0 wrap-break-word overflow-y-auto"
+                    aria-label="Add context for selected element"
+                    aria-keyshortcuts="Enter Escape"
+                    class="text-[var(--rg-text-primary)] text-[13px] leading-4 font-medium bg-transparent border-none resize-none flex-1 p-0 m-0 wrap-break-word overflow-y-auto"
                     style={{
                       "field-sizing": "content",
                       "min-height": "16px",
-                      "max-height": "95px",
+                      "max-height": `${TEXTAREA_MAX_HEIGHT_PX}px`,
                       "scrollbar-width": "none",
                     }}
                     value={props.inputValue ?? ""}
@@ -594,10 +472,12 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
                   <Show when={props.onSubmit}>
                     <button
                       data-react-grab-submit
-                      class="contain-layout shrink-0 flex items-center justify-center size-4 rounded-full bg-black cursor-pointer ml-1 interactive-scale"
+                      type="button"
+                      aria-label="Submit context"
+                      class="contain-layout shrink-0 flex items-center justify-center size-4 rounded-full bg-[var(--rg-submit-bg)] cursor-pointer ml-1 interactive-scale a11y-hitbox"
                       onClick={() => props.onSubmit?.()}
                     >
-                      <IconSubmit size={10} class="text-white" />
+                      <IconSubmit size={10} aria-hidden="true" class="text-[var(--rg-submit-fg)]" />
                     </button>
                   </Show>
                 </div>
@@ -605,11 +485,24 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
             </div>
           </Show>
 
-          <Show when={props.isPendingDismiss}>
-            <DiscardPrompt
-              onConfirm={props.onConfirmDismiss}
-              onCancel={props.onCancelDismiss}
-            />
+          <Show when={props.discardPrompt} keyed>
+            {(discardPrompt) => (
+              <DiscardPrompt
+                label={
+                  discardPrompt.isKeyboardSelection ? "Discard selection?" : discardPrompt.label
+                }
+                showCancel={!discardPrompt.isKeyboardSelection}
+                cancelOnEscape={discardPrompt.cancelOnEscape}
+                onConfirm={discardPrompt.onConfirm}
+                onCopy={discardPrompt.onCopy}
+                onCancel={() => {
+                  if (!discardPrompt.isKeyboardSelection) {
+                    discardPrompt.onCancel?.();
+                  }
+                  focusInOverlay(inputRef, { preventScroll: true });
+                }}
+              />
+            )}
           </Show>
 
           <Show when={props.error}>
@@ -619,7 +512,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
               onRetry={props.onRetry}
             />
           </Show>
-        </div>
+        </Surface>
       </div>
     </Show>
   );

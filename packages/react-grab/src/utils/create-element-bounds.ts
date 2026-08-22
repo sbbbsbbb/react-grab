@@ -1,67 +1,42 @@
 import type { OverlayBounds } from "../types.js";
-import {
-  stripTranslateFromMatrix,
-  stripTranslateFromTransformString,
-} from "./strip-translate-from-transform.js";
-import {
-  BOUNDS_CACHE_TTL_MS,
-  MAX_TRANSFORM_ANCESTOR_DEPTH,
-  TRANSFORM_EARLY_BAIL_DEPTH,
-} from "../constants.js";
+import { BOUNDS_CACHE_TTL_MS, BORDER_RADIUS_CACHE_TTL_MS } from "../constants.js";
+import { convertClientPositionToTopWindow } from "./convert-client-position-to-top-window.js";
+import { getElementComputedStyle } from "./get-element-computed-style.js";
+import { scaleBorderRadius } from "./scale-border-radius.js";
+import { getElementAdapter } from "../core/element-adapter.js";
 
 interface CachedBounds {
   bounds: OverlayBounds;
   timestamp: number;
 }
 
+interface CachedBorderRadius {
+  borderRadius: string;
+  timestamp: number;
+}
+
 let boundsCache = new WeakMap<Element, CachedBounds>();
+let borderRadiusCache = new WeakMap<Element, CachedBorderRadius>();
 
 export const invalidateBoundsCache = () => {
   boundsCache = new WeakMap<Element, CachedBounds>();
+  borderRadiusCache = new WeakMap<Element, CachedBorderRadius>();
 };
 
-const getAccumulatedTransform = (
+const getCachedBorderRadius = (
   element: Element,
-  selfTransform: string,
+  computedStyle: CSSStyleDeclaration | null,
+  now: number,
 ): string => {
-  const hasSelfTransform = selfTransform && selfTransform !== "none";
-
-  let accumulated: DOMMatrix | null = null;
-  let current = element.parentElement;
-  let depth = 0;
-
-  while (
-    current &&
-    current !== document.documentElement &&
-    depth < MAX_TRANSFORM_ANCESTOR_DEPTH
-  ) {
-    const transformValue = window.getComputedStyle(current).transform;
-    if (transformValue && transformValue !== "none") {
-      accumulated = accumulated
-        ? new DOMMatrix(transformValue).multiply(accumulated)
-        : new DOMMatrix(transformValue);
-    } else if (
-      !hasSelfTransform &&
-      !accumulated &&
-      depth >= TRANSFORM_EARLY_BAIL_DEPTH
-    ) {
-      return "none";
-    }
-    current = current.parentElement;
-    depth++;
+  const cached = borderRadiusCache.get(element);
+  if (cached && now - cached.timestamp < BORDER_RADIUS_CACHE_TTL_MS) {
+    return cached.borderRadius;
   }
 
-  if (!accumulated) {
-    return hasSelfTransform
-      ? stripTranslateFromTransformString(selfTransform)
-      : "none";
-  }
-
-  if (hasSelfTransform) {
-    accumulated = accumulated.multiply(new DOMMatrix(selfTransform));
-  }
-
-  return stripTranslateFromMatrix(accumulated);
+  const style = computedStyle ?? getElementComputedStyle(element);
+  const borderRadius = style.borderRadius || "0px";
+  borderRadiusCache.set(element, { borderRadius, timestamp: now });
+  return borderRadius;
 };
 
 export const createElementBounds = (element: Element): OverlayBounds => {
@@ -72,48 +47,31 @@ export const createElementBounds = (element: Element): OverlayBounds => {
     return cached.bounds;
   }
 
-  const rect = element.getBoundingClientRect();
-  const style = window.getComputedStyle(element);
-  const transform = getAccumulatedTransform(element, style.transform);
-
-  let bounds: OverlayBounds;
-
-  if (transform !== "none" && element instanceof HTMLElement) {
-    const ow = element.offsetWidth;
-    const oh = element.offsetHeight;
-
-    if (ow > 0 && oh > 0) {
-      const cx = rect.left + rect.width * 0.5;
-      const cy = rect.top + rect.height * 0.5;
-
-      bounds = {
-        borderRadius: style.borderRadius || "0px",
-        height: oh,
-        transform,
-        width: ow,
-        x: cx - ow * 0.5,
-        y: cy - oh * 0.5,
-      };
-    } else {
-      bounds = {
-        borderRadius: style.borderRadius || "0px",
-        height: rect.height,
-        transform,
-        width: rect.width,
-        x: rect.left,
-        y: rect.top,
-      };
-    }
-  } else {
-    bounds = {
-      borderRadius: style.borderRadius || "0px",
-      height: rect.height,
-      transform,
-      width: rect.width,
-      x: rect.left,
-      y: rect.top,
-    };
+  const adapter = getElementAdapter(element);
+  if (adapter) {
+    const bounds = adapter.getBounds();
+    boundsCache.set(element, { bounds, timestamp: now });
+    return bounds;
   }
+
+  const rect = element.getBoundingClientRect();
+  const topWindowPosition = convertClientPositionToTopWindow(
+    element.ownerDocument.defaultView,
+    rect.left,
+    rect.top,
+  );
+  const borderRadius = scaleBorderRadius(
+    getCachedBorderRadius(element, null, now),
+    topWindowPosition.scaleX,
+    topWindowPosition.scaleY,
+  );
+  const bounds: OverlayBounds = {
+    borderRadius,
+    height: rect.height * topWindowPosition.scaleY,
+    width: rect.width * topWindowPosition.scaleX,
+    x: topWindowPosition.x,
+    y: topWindowPosition.y,
+  };
 
   boundsCache.set(element, { bounds, timestamp: now });
   return bounds;

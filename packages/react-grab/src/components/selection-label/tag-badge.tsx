@@ -1,53 +1,66 @@
-import { Show, createSignal } from "solid-js";
-import type { Component } from "solid-js";
+import { Show, type Component } from "solid-js";
 import type { TagBadgeProps } from "../../types.js";
 import { cn } from "../../utils/cn.js";
-import { IconOpen } from "../icons/icon-open.jsx";
 
 export const TagBadge: Component<TagBadgeProps> = (props) => {
-  const [isHovered, setIsHovered] = createSignal(false);
-
   const handleMouseEnter = () => {
-    setIsHovered(true);
     props.onHoverChange?.(true);
   };
 
   const handleMouseLeave = () => {
-    setIsHovered(false);
     props.onHoverChange?.(false);
   };
 
-  return (
-    <div
-      class={cn(
-        "contain-layout flex items-center gap-1 max-w-[280px] overflow-hidden",
-        props.shrink && "shrink-0",
-        props.isClickable && "cursor-pointer",
-      )}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-      onClick={props.onClick}
-    >
-      <span class="text-[13px] leading-4 h-fit font-medium overflow-hidden text-ellipsis whitespace-nowrap min-w-0">
-        <Show when={props.componentName}>
-          <span class="text-black">{props.componentName}</span>
-          <span class="text-black/50">.{props.tagName}</span>
-        </Show>
-        <Show when={!props.componentName}>
-          <span class="text-black">{props.tagName}</span>
-        </Show>
-      </span>
-      <Show when={props.isClickable || props.forceShowIcon}>
-        <IconOpen
-          size={10}
-          class={cn(
-            "text-black transition-all duration-100 shrink-0",
-            isHovered() || props.forceShowIcon
-              ? "opacity-100 scale-100"
-              : "opacity-0 scale-75 -ml-[2px] w-0",
-          )}
-        />
+  const accessibleName = () =>
+    props.componentName ? `${props.componentName}.${props.tagName}` : props.tagName;
+
+  // Render as a function so the inner span DOM nodes are created fresh per
+  // branch of the outer <Show>. Sharing a single JSX.Element across both
+  // branches is unsafe in SolidJS: a DOM node can only have one parent, so
+  // toggling isClickable can make the label vanish (see solidjs/solid#2216,
+  // solidjs/solid#2357).
+  const renderTagLabel = () => (
+    <span class="text-[var(--rg-text-primary)] text-[13px] leading-4 h-fit font-medium overflow-hidden text-ellipsis whitespace-nowrap min-w-0">
+      <Show when={props.componentName}>
+        <span textContent={props.componentName} />
+        <span class="text-[var(--rg-text-secondary)]" textContent={`.${props.tagName}`} />
       </Show>
-    </div>
+      <Show when={!props.componentName}>
+        <span class="text-[var(--rg-text-primary)]" textContent={props.tagName} />
+      </Show>
+    </span>
+  );
+
+  return (
+    <Show
+      when={props.isClickable}
+      fallback={
+        <div
+          class={cn(
+            "contain-layout flex items-center gap-1 max-w-[280px] overflow-hidden",
+            props.shrink && "shrink-0",
+          )}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          onClick={props.onClick}
+        >
+          {renderTagLabel()}
+        </div>
+      }
+    >
+      <button
+        type="button"
+        aria-label={`Open source for ${accessibleName()}`}
+        class={cn(
+          "contain-layout flex items-center gap-1 max-w-[280px] overflow-hidden cursor-pointer bg-transparent border-none p-0 m-0 text-left",
+          props.shrink && "shrink-0",
+        )}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onClick={props.onClick}
+      >
+        {renderTagLabel()}
+      </button>
+    </Show>
   );
 };

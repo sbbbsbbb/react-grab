@@ -1,12 +1,13 @@
-import { vi, describe, expect, it, beforeEach } from "vitest";
+import { vi, describe, expect, it, beforeEach } from "vite-plus/test";
 import {
   detectFramework,
   detectMonorepo,
   detectNextRouterType,
+  detectProject,
   detectReactGrab,
-  detectInstalledAgents,
+  detectReactGrabConfigured,
   detectUnsupportedFramework,
-  detectAvailableAgentCLIs,
+  findReactProjects,
 } from "../src/utils/detect.js";
 
 vi.mock("node:fs", () => ({
@@ -14,24 +15,33 @@ vi.mock("node:fs", () => ({
   readFileSync: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  execSync: vi.fn(),
+vi.mock("package-manager-detector/detect", () => ({
+  detect: vi.fn(),
 }));
 
 import { existsSync, readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { detect as detectPackageManagerAgent } from "package-manager-detector/detect";
 
 const mockExistsSync = vi.mocked(existsSync);
 const mockReadFileSync = vi.mocked(readFileSync);
-const mockExecSync = vi.mocked(execSync);
+const mockDetectPackageManagerAgent = vi.mocked(detectPackageManagerAgent);
+
+// `path.join` emits `\` on Windows, so normalize to `/` to keep the POSIX-style
+// path literals in these mocks working cross-platform.
+const toPosixPath = (path: unknown): string => `${path}`.replace(/\\/g, "/");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDetectPackageManagerAgent.mockResolvedValue(null);
 });
+
+const onlyPackageJsonExists = (): void => {
+  mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("package.json"));
+};
 
 describe("detectFramework", () => {
   it("should detect Next.js", () => {
-    mockExistsSync.mockReturnValue(true);
+    onlyPackageJsonExists();
     mockReadFileSync.mockReturnValue(
       JSON.stringify({ dependencies: { next: "14.0.0", react: "18.0.0" } }),
     );
@@ -40,28 +50,22 @@ describe("detectFramework", () => {
   });
 
   it("should detect Vite", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ devDependencies: { vite: "5.0.0" } }),
-    );
+    onlyPackageJsonExists();
+    mockReadFileSync.mockReturnValue(JSON.stringify({ devDependencies: { vite: "5.0.0" } }));
 
     expect(detectFramework("/test")).toBe("vite");
   });
 
   it("should detect Webpack", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ devDependencies: { webpack: "5.0.0" } }),
-    );
+    onlyPackageJsonExists();
+    mockReadFileSync.mockReturnValue(JSON.stringify({ devDependencies: { webpack: "5.0.0" } }));
 
     expect(detectFramework("/test")).toBe("webpack");
   });
 
   it("should return unknown when no framework detected", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { react: "18.0.0" } }),
-    );
+    onlyPackageJsonExists();
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { react: "18.0.0" } }));
 
     expect(detectFramework("/test")).toBe("unknown");
   });
@@ -73,14 +77,14 @@ describe("detectFramework", () => {
   });
 
   it("should return unknown for malformed package.json", () => {
-    mockExistsSync.mockReturnValue(true);
+    onlyPackageJsonExists();
     mockReadFileSync.mockReturnValue("{ invalid json }");
 
     expect(detectFramework("/test")).toBe("unknown");
   });
 
   it("should prioritize Next.js over Vite if both are present", () => {
-    mockExistsSync.mockReturnValue(true);
+    onlyPackageJsonExists();
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
         dependencies: { next: "14.0.0" },
@@ -90,12 +94,82 @@ describe("detectFramework", () => {
 
     expect(detectFramework("/test")).toBe("next");
   });
+
+  it("should detect TanStack Start", () => {
+    onlyPackageJsonExists();
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        dependencies: { "@tanstack/react-start": "1.100.0", "@tanstack/react-router": "1.100.0" },
+        devDependencies: { vite: "6.0.0" },
+      }),
+    );
+
+    expect(detectFramework("/test")).toBe("tanstack");
+  });
+
+  it("should prioritize TanStack Start over Vite if both are present", () => {
+    onlyPackageJsonExists();
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        dependencies: { "@tanstack/react-start": "1.100.0" },
+        devDependencies: { vite: "6.0.0" },
+      }),
+    );
+
+    expect(detectFramework("/test")).toBe("tanstack");
+  });
+
+  it("should detect Vite from a config file when deps are hoisted to monorepo root", () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/test/package.json") return true;
+      if (pathString === "/test/vite.config.ts") return true;
+      return false;
+    });
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { react: "18.0.0" } }));
+
+    expect(detectFramework("/test")).toBe("vite");
+  });
+
+  it("should detect Next.js from next.config.mjs without next in deps", () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/test/package.json") return true;
+      if (pathString === "/test/next.config.mjs") return true;
+      return false;
+    });
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { react: "18.0.0" } }));
+
+    expect(detectFramework("/test")).toBe("next");
+  });
+
+  it("should return unknown when only the monorepo root has the framework dep", () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") return true;
+      if (pathString === "/repo/pnpm-workspace.yaml") return true;
+      if (pathString === "/repo/package.json") return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") {
+        return JSON.stringify({ dependencies: { react: "18.0.0" } });
+      }
+      if (pathString === "/repo/package.json") {
+        return JSON.stringify({ devDependencies: { vite: "5.0.0" } });
+      }
+      return "{}";
+    });
+
+    expect(detectFramework("/repo/apps/web")).toBe("unknown");
+  });
 });
 
 describe("detectNextRouterType", () => {
   it("should detect App Router when app/ exists", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("/app");
+      return toPosixPath(path).endsWith("/app");
     });
 
     expect(detectNextRouterType("/test")).toBe("app");
@@ -103,7 +177,7 @@ describe("detectNextRouterType", () => {
 
   it("should detect App Router when src/app/ exists", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("/src/app");
+      return toPosixPath(path).endsWith("/src/app");
     });
 
     expect(detectNextRouterType("/test")).toBe("app");
@@ -111,7 +185,7 @@ describe("detectNextRouterType", () => {
 
   it("should detect Pages Router when pages/ exists", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("/pages");
+      return toPosixPath(path).endsWith("/pages");
     });
 
     expect(detectNextRouterType("/test")).toBe("pages");
@@ -119,7 +193,7 @@ describe("detectNextRouterType", () => {
 
   it("should detect Pages Router when src/pages/ exists", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("/src/pages");
+      return toPosixPath(path).endsWith("/src/pages");
     });
 
     expect(detectNextRouterType("/test")).toBe("pages");
@@ -127,7 +201,7 @@ describe("detectNextRouterType", () => {
 
   it("should prefer App Router if both exist", () => {
     mockExistsSync.mockImplementation((path) => {
-      const pathStr = String(path);
+      const pathStr = toPosixPath(path);
       return pathStr.endsWith("/app") || pathStr.endsWith("/pages");
     });
 
@@ -144,7 +218,7 @@ describe("detectNextRouterType", () => {
 describe("detectMonorepo", () => {
   it("should detect pnpm monorepo", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("pnpm-workspace.yaml");
+      return toPosixPath(path).endsWith("pnpm-workspace.yaml");
     });
 
     expect(detectMonorepo("/test")).toBe(true);
@@ -152,7 +226,7 @@ describe("detectMonorepo", () => {
 
   it("should detect lerna monorepo", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("lerna.json");
+      return toPosixPath(path).endsWith("lerna.json");
     });
 
     expect(detectMonorepo("/test")).toBe(true);
@@ -160,22 +234,18 @@ describe("detectMonorepo", () => {
 
   it("should detect npm/yarn workspaces", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("package.json");
+      return toPosixPath(path).endsWith("package.json");
     });
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ workspaces: ["packages/*"] }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ workspaces: ["packages/*"] }));
 
     expect(detectMonorepo("/test")).toBe(true);
   });
 
   it("should return false for non-monorepo", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("package.json");
+      return toPosixPath(path).endsWith("package.json");
     });
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { react: "18.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { react: "18.0.0" } }));
 
     expect(detectMonorepo("/test")).toBe(false);
   });
@@ -184,9 +254,7 @@ describe("detectMonorepo", () => {
 describe("detectReactGrab", () => {
   it("should detect react-grab in dependencies", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { "react-grab": "1.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { "react-grab": "1.0.0" } }));
 
     expect(detectReactGrab("/test")).toBe(true);
   });
@@ -202,9 +270,7 @@ describe("detectReactGrab", () => {
 
   it("should return false when react-grab is not installed", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { react: "18.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { react: "18.0.0" } }));
 
     expect(detectReactGrab("/test")).toBe(false);
   });
@@ -223,69 +289,192 @@ describe("detectReactGrab", () => {
   });
 });
 
-describe("detectInstalledAgents", () => {
-  it("should detect installed agents", () => {
-    mockExistsSync.mockReturnValue(true);
+describe("detectReactGrabConfigured", () => {
+  it("should return false when react-grab only exists in dependencies", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("package.json"));
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { "react-grab": "1.0.0" } }));
+
+    expect(detectReactGrabConfigured("/test")).toBe(false);
+  });
+
+  it("should detect react-grab setup in a Next.js app layout", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("app/layout.tsx"));
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({
-        devDependencies: {
-          "@react-grab/cursor": "1.0.0",
-          "@react-grab/claude-code": "1.0.0",
-        },
-      }),
+      '<Script src="//unpkg.com/react-grab/dist/index.global.js" />',
     );
 
-    const agents = detectInstalledAgents("/test");
-    expect(agents).toContain("cursor");
-    expect(agents).toContain("claude-code");
-    expect(agents).not.toContain("opencode");
+    expect(detectReactGrabConfigured("/test")).toBe(true);
   });
 
-  it("should return empty array when no agents installed", () => {
-    mockExistsSync.mockReturnValue(true);
+  it("should detect react-grab setup in a JSX template literal script src", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("app/layout.tsx"));
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { "react-grab": "1.0.0" } }),
+      "<Script src={`//unpkg.com/react-grab/dist/index.global.js`} />",
     );
 
-    expect(detectInstalledAgents("/test")).toEqual([]);
+    expect(detectReactGrabConfigured("/test")).toBe(true);
   });
 
-  it("should return empty array when no package.json exists", () => {
-    mockExistsSync.mockReturnValue(false);
-
-    expect(detectInstalledAgents("/test")).toEqual([]);
-  });
-
-  it("should return empty array for malformed package.json", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue("{ broken }");
-
-    expect(detectInstalledAgents("/test")).toEqual([]);
-  });
-
-  it("should detect mcp when @react-grab/mcp is installed", () => {
-    mockExistsSync.mockReturnValue(true);
+  it("should detect react-grab setup in a JavaScript Next.js app layout", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("app/layout.js"));
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({
-        devDependencies: {
-          "@react-grab/mcp": "0.1.0",
-        },
-      }),
+      '<Script src="//unpkg.com/react-grab/dist/index.global.js" />',
     );
 
-    const agents = detectInstalledAgents("/test");
-    expect(agents).toContain("mcp");
+    expect(detectReactGrabConfigured("/test")).toBe(true);
+  });
+
+  it("should detect react-grab setup in a JavaScript entry import", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("src/main.js"));
+    mockReadFileSync.mockReturnValue('if (import.meta.env.DEV) import("react-grab");');
+
+    expect(detectReactGrabConfigured("/test")).toBe(true);
+  });
+
+  it("should detect react-grab setup in subpath imports", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("src/main.ts"));
+    mockReadFileSync.mockReturnValue(
+      'if (import.meta.env.DEV) import("react-grab/dist/index.global.js");',
+    );
+
+    expect(detectReactGrabConfigured("/test")).toBe(true);
+  });
+
+  it("should detect react-grab setup in module instrumentation files", () => {
+    mockExistsSync.mockImplementation((path) =>
+      toPosixPath(path).endsWith("instrumentation-client.mts"),
+    );
+    mockReadFileSync.mockReturnValue(
+      'if (process.env.NODE_ENV === "development") import("react-grab");',
+    );
+
+    expect(detectReactGrabConfigured("/test")).toBe(true);
+  });
+
+  it("should ignore comments that mention react-grab", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("app/layout.tsx"));
+    mockReadFileSync.mockReturnValue(`const setupLater = true; // import("react-grab") later
+// import("react-grab") later
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`);
+
+    expect(detectReactGrabConfigured("/test")).toBe(false);
+  });
+
+  it("should ignore type-only imports from react-grab", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("app/layout.tsx"));
+    mockReadFileSync.mockReturnValue(`import type { ReactGrabAPI } from "react-grab";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`);
+
+    expect(detectReactGrabConfigured("/test")).toBe(false);
+  });
+
+  it("should ignore inline type-only imports from react-grab", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("app/layout.tsx"));
+    mockReadFileSync.mockReturnValue(`import { type ReactGrabAPI } from "react-grab";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`);
+
+    expect(detectReactGrabConfigured("/test")).toBe(false);
+  });
+
+  it("should ignore trailing-comma inline type-only imports from react-grab", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("app/layout.tsx"));
+    mockReadFileSync.mockReturnValue(`import { type ReactGrabAPI, } from "react-grab";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}`);
+
+    expect(detectReactGrabConfigured("/test")).toBe(false);
+  });
+
+  it("should detect mixed runtime and inline type imports from react-grab", () => {
+    mockExistsSync.mockImplementation((path) => toPosixPath(path).endsWith("app/layout.tsx"));
+    mockReadFileSync.mockReturnValue('import { init, type ReactGrabAPI } from "react-grab";');
+
+    expect(detectReactGrabConfigured("/test")).toBe(true);
   });
 });
 
 describe("detectMonorepo", () => {
   it("should return false for malformed package.json", () => {
     mockExistsSync.mockImplementation((path) => {
-      return String(path).endsWith("package.json");
+      return toPosixPath(path).endsWith("package.json");
     });
     mockReadFileSync.mockReturnValue("invalid");
 
     expect(detectMonorepo("/test")).toBe(false);
+  });
+});
+
+describe("findReactProjects", () => {
+  it("should use the enclosing monorepo root when called from a workspace package", () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/pnpm-workspace.yaml") return true;
+      if (pathString === "/repo/package.json") return true;
+      if (pathString === "/repo/apps/web") return true;
+      if (pathString === "/repo/apps/web/package.json") return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/pnpm-workspace.yaml") return "packages:\n  - apps/web\n";
+      if (pathString === "/repo/apps/web/package.json") {
+        return JSON.stringify({ name: "web", dependencies: { react: "18.0.0", vite: "6.0.0" } });
+      }
+      return JSON.stringify({ private: true });
+    });
+
+    expect(
+      findReactProjects("/repo/apps/web").map((project) => ({
+        ...project,
+        path: toPosixPath(project.path),
+      })),
+    ).toEqual([{ name: "web", path: "/repo/apps/web", framework: "vite" }]);
+  });
+
+  it("should include a local React project that is not listed in the enclosing workspace", () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/pnpm-workspace.yaml") return true;
+      if (pathString === "/repo/package.json") return true;
+      if (pathString === "/repo/apps/web") return true;
+      if (pathString === "/repo/apps/web/package.json") return true;
+      if (pathString === "/repo/examples/demo/package.json") return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/pnpm-workspace.yaml") return "packages:\n  - apps/web\n";
+      if (pathString === "/repo/apps/web/package.json") {
+        return JSON.stringify({ name: "web", dependencies: { react: "18.0.0", vite: "6.0.0" } });
+      }
+      if (pathString === "/repo/examples/demo/package.json") {
+        return JSON.stringify({
+          name: "demo",
+          dependencies: { react: "18.0.0", vite: "6.0.0" },
+        });
+      }
+      return JSON.stringify({ private: true });
+    });
+
+    expect(
+      findReactProjects("/repo/examples/demo").map((project) => ({
+        ...project,
+        path: toPosixPath(project.path),
+      })),
+    ).toEqual([
+      { name: "demo", path: "/repo/examples/demo", framework: "vite" },
+      { name: "web", path: "/repo/apps/web", framework: "vite" },
+    ]);
   });
 });
 
@@ -301,9 +490,7 @@ describe("detectUnsupportedFramework", () => {
 
   it("should detect Astro", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ devDependencies: { astro: "4.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ devDependencies: { astro: "4.0.0" } }));
 
     expect(detectUnsupportedFramework("/test")).toBe("astro");
   });
@@ -319,18 +506,14 @@ describe("detectUnsupportedFramework", () => {
 
   it("should detect Gatsby", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { gatsby: "5.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { gatsby: "5.0.0" } }));
 
     expect(detectUnsupportedFramework("/test")).toBe("gatsby");
   });
 
   it("should return null for supported frameworks", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      JSON.stringify({ dependencies: { next: "14.0.0" } }),
-    );
+    mockReadFileSync.mockReturnValue(JSON.stringify({ dependencies: { next: "14.0.0" } }));
 
     expect(detectUnsupportedFramework("/test")).toBe(null);
   });
@@ -349,39 +532,162 @@ describe("detectUnsupportedFramework", () => {
   });
 });
 
-describe("detectAvailableAgentCLIs", () => {
-  it("should return all available CLIs", () => {
-    mockExecSync.mockImplementation(() => Buffer.from(""));
+describe("detectProject", () => {
+  it("should distinguish an installed dependency from completed setup", async () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      return pathString === "/app/package.json";
+    });
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({ dependencies: { next: "14.0.0", react: "18.0.0", "react-grab": "1.0.0" } }),
+    );
 
-    const available = detectAvailableAgentCLIs();
-    expect(available).toContain("claude");
-    expect(available).toContain("cursor-agent");
-    expect(available).toContain("opencode");
+    const project = await detectProject("/app");
+
+    expect(project.hasReactGrab).toBe(true);
+    expect(project.isReactGrabConfigured).toBe(false);
   });
 
-  it("should return only available CLIs", () => {
-    mockExecSync.mockImplementation((command) => {
-      const commandString = String(command);
-      if (commandString.includes("claude")) {
-        return Buffer.from("/usr/local/bin/claude");
+  it("should mark setup complete when react-grab exists in a framework entry file", async () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      return pathString === "/app/package.json" || pathString === "/app/src/main.tsx";
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/app/package.json") {
+        return JSON.stringify({ dependencies: { react: "18.0.0", vite: "6.0.0" } });
       }
-      if (commandString.includes("opencode")) {
-        return Buffer.from("/usr/local/bin/opencode");
-      }
-      throw new Error("Command not found");
+      return 'if (import.meta.env.DEV) import("react-grab");';
     });
 
-    const available = detectAvailableAgentCLIs();
-    expect(available).toContain("claude");
-    expect(available).toContain("opencode");
-    expect(available).not.toContain("cursor-agent");
+    const project = await detectProject("/app");
+
+    expect(project.hasReactGrab).toBe(true);
+    expect(project.isReactGrabConfigured).toBe(true);
   });
 
-  it("should return empty array when no CLIs are available", () => {
-    mockExecSync.mockImplementation(() => {
-      throw new Error("Command not found");
+  it("should fall back to monorepo root framework when subpackage has hoisted deps", async () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") return true;
+      if (pathString === "/repo/pnpm-workspace.yaml") return true;
+      if (pathString === "/repo/package.json") return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") {
+        return JSON.stringify({ dependencies: { react: "18.0.0" } });
+      }
+      if (pathString === "/repo/package.json") {
+        return JSON.stringify({ devDependencies: { vite: "5.0.0" } });
+      }
+      return "{}";
     });
 
-    expect(detectAvailableAgentCLIs()).toEqual([]);
+    const project = await detectProject("/repo/apps/web");
+
+    expect(project.framework).toBe("vite");
+    expect(project.isMonorepo).toBe(true);
+    expect(project.projectRoot).toBe("/repo/apps/web");
+  });
+
+  it("should prefer the subpackage's own framework dep over monorepo root", async () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") return true;
+      if (pathString === "/repo/pnpm-workspace.yaml") return true;
+      if (pathString === "/repo/package.json") return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") {
+        return JSON.stringify({ dependencies: { next: "14.0.0", react: "18.0.0" } });
+      }
+      if (pathString === "/repo/package.json") {
+        return JSON.stringify({ devDependencies: { vite: "5.0.0" } });
+      }
+      return "{}";
+    });
+
+    const project = await detectProject("/repo/apps/web");
+
+    expect(project.framework).toBe("next");
+  });
+
+  it("should not inherit a parent's framework when the parent is not a monorepo", async () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/parent/child/package.json") return true;
+      if (pathString === "/parent/package.json") return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/parent/child/package.json") {
+        return JSON.stringify({ dependencies: { react: "18.0.0" } });
+      }
+      if (pathString === "/parent/package.json") {
+        return JSON.stringify({ devDependencies: { vite: "5.0.0" } });
+      }
+      return "{}";
+    });
+
+    const project = await detectProject("/parent/child");
+
+    expect(project.framework).toBe("unknown");
+    expect(project.isMonorepo).toBe(false);
+  });
+
+  it("should leave framework unknown when neither subpackage nor monorepo root advertise one", async () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") return true;
+      if (pathString === "/repo/pnpm-workspace.yaml") return true;
+      if (pathString === "/repo/package.json") return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") {
+        return JSON.stringify({ dependencies: { react: "18.0.0" } });
+      }
+      if (pathString === "/repo/package.json") {
+        return JSON.stringify({ dependencies: { typescript: "5.0.0" } });
+      }
+      return "{}";
+    });
+
+    const project = await detectProject("/repo/apps/web");
+
+    expect(project.framework).toBe("unknown");
+    expect(project.isMonorepo).toBe(true);
+  });
+
+  it("should resolve framework from local config file before falling back to monorepo root", async () => {
+    mockExistsSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") return true;
+      if (pathString === "/repo/apps/web/vite.config.ts") return true;
+      if (pathString === "/repo/pnpm-workspace.yaml") return true;
+      if (pathString === "/repo/package.json") return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((path) => {
+      const pathString = toPosixPath(path);
+      if (pathString === "/repo/apps/web/package.json") {
+        return JSON.stringify({ dependencies: { react: "18.0.0" } });
+      }
+      if (pathString === "/repo/package.json") {
+        return JSON.stringify({ devDependencies: { next: "14.0.0" } });
+      }
+      return "{}";
+    });
+
+    const project = await detectProject("/repo/apps/web");
+
+    expect(project.framework).toBe("vite");
   });
 });

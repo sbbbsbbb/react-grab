@@ -39,49 +39,30 @@ nr dev
 ## Project Structure
 
 ```
+apps/
+├── e2e-app-vite/        # E2E test target app (Vite)
+├── e2e-app-next/        # E2E test target app (Next, for Next-runtime paths)
+├── openstory/           # Openstory gallery: UI states + ad-hoc targeting playground
+├── web-extension/       # Browser extension
+└── website/             # Documentation site (react-grab.com)
+
 packages/
-├── react-grab/          # Core library
-├── grab/                # Bundled package (library + CLI, published as `grab`)
 ├── cli/                 # CLI implementation (@react-grab/cli)
-├── provider-cursor/     # Cursor agent integration
-├── provider-claude-code/  # Claude Code integration
-├── provider-opencode/   # OpenCode integration
-├── provider-codex/      # OpenAI Codex integration
-├── provider-gemini/     # Google Gemini CLI integration
-├── provider-amp/        # Amp SDK integration
-├── provider-ami/        # AMI client
-├── website/             # Documentation site (react-grab.com)
-├── vite-playground/     # Vite development playground
-├── next-playground/     # Next.js development playground
-├── agent-playground/    # Agent testing playground
-├── benchmarks/          # Performance benchmarks
-└── web-extension/       # Browser extension
+├── grab/                # Bundled package (library + CLI, published as `grab`)
+└── react-grab/          # Core library
 ```
 
 ## Development Workflow
 
-### Running Playgrounds
+### Running the Openstory Playground
 
-Test your changes in the playgrounds:
+Run openstory locally to exercise react-grab against realistic DOM fixtures (composite dashboard, freeze-demo, live-updates, and targeting edge cases):
 
 ```bash
-# Vite playground
-pnpm --filter vite-playground dev
-
-# Next.js playground
-pnpm --filter next-playground dev
-
-# Agent playground (for testing agent provider integrations)
-pnpm --filter @react-grab/agent-playground dev:claude   # Claude Code
-pnpm --filter @react-grab/agent-playground dev:cursor   # Cursor
-pnpm --filter @react-grab/agent-playground dev:opencode # OpenCode
-pnpm --filter @react-grab/agent-playground dev:codex    # Codex
-pnpm --filter @react-grab/agent-playground dev:gemini   # Gemini
-pnpm --filter @react-grab/agent-playground dev:amp      # Amp
-pnpm --filter @react-grab/agent-playground dev:ami      # Ami
+pnpm --filter @react-grab/openstory dev
 ```
 
-The agent playground runs at `http://localhost:5174` and lets you test react-grab's agent provider API with multiple backends.
+Opens at `http://localhost:6006`. The **Playground/** section hosts ad-hoc scenarios (replaces the former `apps/gym`) with real `init()` running so you can hover/grab to verify behavior.
 
 ### Running Tests
 
@@ -95,7 +76,7 @@ pnpm --filter @react-grab/cli test
 ```bash
 nr lint        # Check for lint errors
 nr lint:fix    # Fix lint errors
-nr format      # Format code with Prettier
+nr format      # Format code with oxfmt
 ```
 
 ## Code Style
@@ -103,7 +84,7 @@ nr format      # Format code with Prettier
 - **Use TypeScript interfaces** over types
 - **Use arrow functions** over function declarations
 - **Use kebab-case** for file names
-- **Use descriptive variable names** — avoid shorthands or 1-2 character names
+- **Use descriptive variable names** - avoid shorthands or 1-2 character names
   - Example: `innerElement` instead of `el`
   - Example: `didPositionChange` instead of `moved`
 - **Avoid type casting** (`as`) unless absolutely necessary
@@ -134,12 +115,12 @@ git commit -m "feat: add new feature"
 
 We use conventional commits:
 
-- `feat:` — New feature
-- `fix:` — Bug fix
-- `docs:` — Documentation changes
-- `chore:` — Maintenance tasks
-- `refactor:` — Code refactoring
-- `test:` — Test additions or changes
+- `feat:` - New feature
+- `fix:` - Bug fix
+- `docs:` - Documentation changes
+- `chore:` - Maintenance tasks
+- `refactor:` - Code refactoring
+- `test:` - Test additions or changes
 
 ### Adding a Changeset
 

@@ -1,11 +1,9 @@
 import { MAX_ARROW_NAVIGATION_HISTORY } from "../constants.js";
-import type { OverlayBounds } from "../types.js";
+import type { ElementPredicate, OverlayBounds } from "../types.js";
 import { getElementsAtPoint } from "../utils/get-element-at-position.js";
+import { getElementTextBounds } from "../utils/get-element-text-bounds.js";
+import { getVisibleBoundsCenter } from "../utils/get-visible-bounds-center.js";
 import { isElementConnected } from "../utils/is-element-connected.js";
-
-interface ElementValidator {
-  (element: Element): boolean;
-}
 
 interface BoundsCalculator {
   (element: Element): OverlayBounds;
@@ -17,20 +15,32 @@ interface ArrowNavigator {
 }
 
 export const createArrowNavigator = (
-  isValidGrabbableElement: ElementValidator,
+  isValidGrabbableElement: ElementPredicate,
+  isNavigableSibling: ElementPredicate,
   createElementBounds: BoundsCalculator,
 ): ArrowNavigator => {
   let navigationHistory: Element[] = [];
 
-  const findVerticalNext = (
-    currentElement: Element,
-    direction: 1 | -1,
-  ): Element | null => {
-    const bounds = createElementBounds(currentElement);
-    const elementsAtPoint = getElementsAtPoint(
-      bounds.x + bounds.width / 2,
-      bounds.y + bounds.height / 2,
-    ).filter(isValidGrabbableElement);
+  const findVerticalNext = (currentElement: Element, direction: 1 | -1): Element | null => {
+    const textBounds = getElementTextBounds(currentElement);
+    let probeBounds = createElementBounds(currentElement);
+    if (textBounds) {
+      for (const textFragmentBounds of textBounds) {
+        if (
+          textFragmentBounds.x < window.innerWidth &&
+          textFragmentBounds.x + textFragmentBounds.width > 0 &&
+          textFragmentBounds.y < window.innerHeight &&
+          textFragmentBounds.y + textFragmentBounds.height > 0
+        ) {
+          probeBounds = textFragmentBounds;
+          break;
+        }
+      }
+    }
+    const probePoint = getVisibleBoundsCenter(probeBounds);
+    const elementsAtPoint = getElementsAtPoint(probePoint.x, probePoint.y).filter(
+      isValidGrabbableElement,
+    );
 
     const currentIndex = elementsAtPoint.indexOf(currentElement);
     if (currentIndex === -1) return null;
@@ -42,9 +52,7 @@ export const createArrowNavigator = (
     if (nextElement) {
       navigationHistory.push(currentElement);
       if (navigationHistory.length > MAX_ARROW_NAVIGATION_HISTORY) {
-        navigationHistory = navigationHistory.slice(
-          -MAX_ARROW_NAVIGATION_HISTORY,
-        );
+        navigationHistory = navigationHistory.slice(-MAX_ARROW_NAVIGATION_HISTORY);
       }
     }
     return nextElement;
@@ -60,67 +68,25 @@ export const createArrowNavigator = (
     return findVerticalNext(currentElement, -1);
   };
 
-  const findHorizontal = (
-    currentElement: Element,
-    isForward: boolean,
-  ): Element | null => {
-    const findEdgeDescendant = (parentElement: Element): Element | null => {
-      const children = Array.from(parentElement.children);
-      const ordered = isForward ? children : children.reverse();
-      for (const childElement of ordered) {
-        if (isForward) {
-          if (isValidGrabbableElement(childElement)) return childElement;
-          const descendant = findEdgeDescendant(childElement);
-          if (descendant) return descendant;
-        } else {
-          const descendant = findEdgeDescendant(childElement);
-          if (descendant) return descendant;
-          if (isValidGrabbableElement(childElement)) return childElement;
-        }
-      }
-      return null;
-    };
-
+  // ArrowLeft/ArrowRight walk strictly between DOM siblings of the current
+  // element (previous/back, next/forward), skipping non-grabbable or
+  // zero-size siblings. Climbing to parents and descending into children is
+  // handled by the vertical (Up/Down) traversal instead.
+  const findHorizontal = (currentElement: Element, isForward: boolean): Element | null => {
     const getSibling = (element: Element) =>
       isForward ? element.nextElementSibling : element.previousElementSibling;
 
-    let nextElement: Element | null = null;
-
-    if (isForward) {
-      nextElement = findEdgeDescendant(currentElement);
-    }
-
-    if (!nextElement) {
-      let searchElement: Element | null = currentElement;
-      while (searchElement) {
-        let sibling = getSibling(searchElement);
-        while (sibling) {
-          const descendant = findEdgeDescendant(sibling);
-          if (descendant) {
-            nextElement = descendant;
-            break;
-          }
-          if (isValidGrabbableElement(sibling)) {
-            nextElement = sibling;
-            break;
-          }
-          sibling = getSibling(sibling);
-        }
-        if (nextElement) break;
-        const parentElement: HTMLElement | null = searchElement.parentElement;
-        if (
-          !isForward &&
-          parentElement &&
-          isValidGrabbableElement(parentElement)
-        ) {
-          nextElement = parentElement;
-          break;
-        }
-        searchElement = parentElement;
+    let sibling = getSibling(currentElement);
+    while (sibling) {
+      if (isNavigableSibling(sibling)) {
+        // Moving sideways invalidates the vertical Up history, otherwise the
+        // next ArrowDown would retrace into the branch we just left.
+        navigationHistory = [];
+        return sibling;
       }
+      sibling = getSibling(sibling);
     }
-
-    return nextElement;
+    return null;
   };
 
   const findNext = (key: string, currentElement: Element): Element | null => {

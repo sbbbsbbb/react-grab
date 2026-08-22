@@ -1,12 +1,24 @@
 import { test as base, expect, Page, Locator } from "@playwright/test";
+import {
+  ATTRIBUTE_NAME,
+  KEYBOARD_ACTIVATION_SETTLE_DELAY_MS,
+  UI_STATE_TIMEOUT_MS,
+} from "./constants.js";
+import { COVERAGE_RAW_DIR } from "./coverage-config.js";
+import { getTextInteractionPosition } from "./get-text-interaction-position.js";
 
-const ATTRIBUTE_NAME = "data-react-grab";
-const DEFAULT_KEY_HOLD_DURATION_MS = 200;
-const ACTIVATION_BUFFER_MS = 200;
+const COVERAGE_ENABLED = Boolean(process.env.COVERAGE);
+
 const PAGE_SETUP_MAX_ATTEMPTS = 2;
 const PAGE_SETUP_NAVIGATION_TIMEOUT_MS = 8_000;
-const PAGE_SETUP_API_TIMEOUT_MS = 8_000;
-const MODIFIER_KEY = process.platform === "darwin" ? "Meta" : "Control";
+const PAGE_SETUP_API_TIMEOUT_MS = 15_000;
+const DRAG_SELECT_STEPS = 10;
+const TOOLBAR_SNAP_ANIMATION_WAIT_MS = 300;
+const TOOLBAR_SNAP_EDGE_THRESHOLD_PX = 30;
+const TOUCH_DRAG_STEPS = 10;
+const PAGE_SETUP_RETRY_BACKOFF_MS = 250;
+const SELECTION_HOVER_ATTEMPTS = 3;
+const SELECTION_HOVER_TIMEOUT_MS = 4_000;
 
 interface ContextMenuInfo {
   isVisible: boolean;
@@ -39,20 +51,21 @@ interface ToolbarInfo {
   snapEdge: string | null;
 }
 
-interface AgentSessionInfo {
-  id: string;
-  status: string;
-  isStreaming: boolean;
-  error: string | null;
-  prompt: string;
-}
-
 interface LabelInstanceInfo {
   id: string;
   status: string;
   tagName: string;
   componentName?: string;
   createdAt: number;
+}
+
+interface ReinitializableApi {
+  dispose: () => void;
+}
+
+interface ReinitializableWindow {
+  __REACT_GRAB__?: ReinitializableApi;
+  initReactGrab?: (options?: Record<string, unknown>) => ReinitializableApi;
 }
 
 interface ReactGrabState {
@@ -70,11 +83,6 @@ interface ReactGrabState {
   labelInstances: LabelInstanceInfo[];
 }
 
-interface CrosshairInfo {
-  isVisible: boolean;
-  position: { x: number; y: number } | null;
-}
-
 interface GrabbedBoxInfo {
   count: number;
   boxes: Array<{
@@ -83,28 +91,36 @@ interface GrabbedBoxInfo {
   }>;
 }
 
-interface HistoryDropdownInfo {
-  isVisible: boolean;
-  itemCount: number;
+interface BrowserPlatformInfo {
+  platform: string;
+  userAgentDataPlatform: string | null;
+  userAgent: string;
 }
+
+type ModifierKey = "Meta" | "Control";
+
+const getHostModifierKey = (): ModifierKey => (process.platform === "darwin" ? "Meta" : "Control");
 
 export interface ReactGrabPageObject {
   page: Page;
-  modifierKey: "Meta" | "Control";
+  modifierKey: ModifierKey;
+  feedbackModifierKey: ModifierKey;
   activate: () => Promise<void>;
   activateViaKeyboard: () => Promise<void>;
+  activateViaKeyboardFrom: (selector: string) => Promise<void>;
   deactivate: () => Promise<void>;
-  holdToActivate: (durationMs?: number) => Promise<void>;
   isOverlayVisible: () => Promise<boolean>;
   getOverlayHost: () => Locator;
-  getShadowRoot: () => Promise<Element | null>;
   hoverElement: (selector: string) => Promise<void>;
+  hoverUntilTargetSelected: (selector: string) => Promise<void>;
+  hoverUntilSelected: (selector: string) => Promise<void>;
   clickElement: (selector: string) => Promise<void>;
   rightClickElement: (selector: string) => Promise<void>;
   rightClickAtPosition: (x: number, y: number) => Promise<void>;
   dragSelect: (startSelector: string, endSelector: string) => Promise<void>;
   getClipboardContent: () => Promise<string>;
-  waitForSelectionBox: () => Promise<void>;
+  captureNextClipboardWrites: () => Promise<Record<string, string>>;
+  waitForSelectionBox: (timeout?: number) => Promise<void>;
   waitForSelectionSource: () => Promise<void>;
   isContextMenuVisible: () => Promise<boolean>;
   getContextMenuInfo: () => Promise<ContextMenuInfo>;
@@ -115,7 +131,6 @@ export interface ReactGrabPageObject {
   pressArrowDown: () => Promise<void>;
   pressArrowUp: () => Promise<void>;
   pressArrowLeft: () => Promise<void>;
-  pressArrowRight: () => Promise<void>;
   pressEnter: () => Promise<void>;
   pressKey: (key: string) => Promise<void>;
   pressKeyCombo: (modifiers: string[], key: string) => Promise<void>;
@@ -127,39 +142,22 @@ export interface ReactGrabPageObject {
   typeInInput: (text: string) => Promise<void>;
   getInputValue: () => Promise<string>;
   submitInput: () => Promise<void>;
-  clearInput: () => Promise<void>;
   isPendingDismissVisible: () => Promise<boolean>;
 
   isToolbarVisible: () => Promise<boolean>;
   isToolbarCollapsed: () => Promise<boolean>;
   getToolbarInfo: () => Promise<ToolbarInfo>;
   clickToolbarToggle: () => Promise<void>;
+  clickToolbarAction: (actionId: string) => Promise<void>;
+  getToolbarActionPressed: (actionId: string) => Promise<boolean | null>;
   clickToolbarCollapse: () => Promise<void>;
   dragToolbar: (deltaX: number, deltaY: number) => Promise<void>;
-  clickToolbarEnabled: () => Promise<void>;
-  dragToolbarFromButton: (
-    buttonSelector: string,
-    deltaX: number,
-    deltaY: number,
-  ) => Promise<void>;
+  dragToolbarFromButton: (buttonSelector: string, deltaX: number, deltaY: number) => Promise<void>;
 
-  isHistoryButtonVisible: () => Promise<boolean>;
-  hasUnreadHistoryIndicator: () => Promise<boolean>;
-  clickHistoryButton: () => Promise<void>;
-  isHistoryDropdownVisible: () => Promise<boolean>;
-  getHistoryDropdownInfo: () => Promise<HistoryDropdownInfo>;
-  clickHistoryItem: (index: number) => Promise<void>;
-  clickHistoryItemRemove: (index: number) => Promise<void>;
-  clickHistoryItemCopy: (index: number) => Promise<void>;
-  clickHistoryCopyAll: () => Promise<void>;
-  clickHistoryClear: () => Promise<void>;
-  hoverHistoryItem: (index: number) => Promise<void>;
-  hoverHistoryButton: () => Promise<void>;
-  hoverCopyAllButton: () => Promise<void>;
-  getHistoryDropdownPosition: () => Promise<{
-    left: number;
-    top: number;
-  } | null>;
+  rightClickToolbarToggle: () => Promise<void>;
+  isToolbarMenuVisible: () => Promise<boolean>;
+  getToolbarMenuItemLabels: () => Promise<string[]>;
+  clickToolbarMenuItem: (actionId: string) => Promise<void>;
 
   getSelectionLabelInfo: () => Promise<SelectionLabelInfo>;
   getSelectionLabelBounds: () => Promise<SelectionLabelBounds | null>;
@@ -167,8 +165,6 @@ export interface ReactGrabPageObject {
   waitForSelectionLabel: () => Promise<void>;
   getLabelStatusText: () => Promise<string | null>;
 
-  getCrosshairInfo: () => Promise<CrosshairInfo>;
-  isCrosshairVisible: () => Promise<boolean>;
   getGrabbedBoxInfo: () => Promise<GrabbedBoxInfo>;
   getLabelInstancesInfo: () => Promise<LabelInstanceInfo[]>;
   isGrabbedBoxVisible: () => Promise<boolean>;
@@ -184,41 +180,21 @@ export interface ReactGrabPageObject {
     width: number;
     height: number;
   } | null>;
+  getTargetTestId: () => Promise<string | null>;
 
   getState: () => Promise<ReactGrabState>;
   toggle: () => Promise<void>;
   dispose: () => Promise<void>;
   copyElementViaApi: (selector: string) => Promise<boolean>;
-  setAgent: (options: Record<string, unknown>) => Promise<void>;
+  registerCommentAction: () => Promise<void>;
   updateOptions: (options: Record<string, unknown>) => Promise<void>;
-  reinitialize: (options?: Record<string, unknown>) => Promise<void>;
-
-  setupMockAgent: (options?: {
-    delay?: number;
-    error?: string;
-    statusUpdates?: string[];
-  }) => Promise<void>;
-  getAgentSessions: () => Promise<AgentSessionInfo[]>;
-  isAgentSessionVisible: () => Promise<boolean>;
-  waitForAgentSession: (timeout?: number) => Promise<void>;
-  waitForAgentComplete: (timeout?: number) => Promise<void>;
-  clickAgentDismiss: () => Promise<void>;
-  clickAgentUndo: () => Promise<void>;
-  clickAgentRetry: () => Promise<void>;
-  clickAgentAbort: () => Promise<void>;
-  confirmAgentAbort: () => Promise<void>;
-  cancelAgentAbort: () => Promise<void>;
+  reinitialize: (options?: Record<string, unknown>) => Promise<boolean>;
 
   touchStart: (x: number, y: number) => Promise<void>;
   touchMove: (x: number, y: number) => Promise<void>;
   touchEnd: (x: number, y: number) => Promise<void>;
   touchTap: (selector: string) => Promise<void>;
-  touchDrag: (
-    startX: number,
-    startY: number,
-    endX: number,
-    endY: number,
-  ) => Promise<void>;
+  touchDrag: (startX: number, startY: number, endX: number, endY: number) => Promise<void>;
   isTouchMode: () => Promise<boolean>;
 
   setViewportSize: (width: number, height: number) => Promise<void>;
@@ -226,7 +202,6 @@ export interface ReactGrabPageObject {
 
   removeElement: (selector: string) => Promise<void>;
   hideElement: (selector: string) => Promise<void>;
-  showElement: (selector: string) => Promise<void>;
   getElementBounds: (
     selector: string,
   ) => Promise<{ x: number; y: number; width: number; height: number } | null>;
@@ -234,27 +209,49 @@ export interface ReactGrabPageObject {
   openDropdown: () => Promise<void>;
 
   setupCallbackTracking: () => Promise<void>;
-  getCallbackHistory: () => Promise<
-    Array<{ name: string; args: unknown[]; timestamp: number }>
-  >;
+  getCallbackHistory: () => Promise<Array<{ name: string; args: unknown[]; timestamp: number }>>;
   clearCallbackHistory: () => Promise<void>;
   waitForCallback: (name: string, timeout?: number) => Promise<unknown[]>;
 }
 
-const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
-  const getOverlayHost = () => page.locator(`[${ATTRIBUTE_NAME}]`).first();
+const getBrowserModifierKey = async (page: Page): Promise<ModifierKey> => {
+  const platformInfo = await page.evaluate((): BrowserPlatformInfo => {
+    let userAgentDataPlatform: string | null = null;
 
-  const getShadowRoot = async () => {
-    return page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      return host?.shadowRoot?.querySelector(`[${attrName}]`) ?? null;
-    }, ATTRIBUTE_NAME);
-  };
+    if ("userAgentData" in navigator) {
+      const userAgentData = navigator.userAgentData;
+      if (typeof userAgentData === "object" && userAgentData !== null) {
+        if ("platform" in userAgentData) {
+          const platform = userAgentData.platform;
+          if (typeof platform === "string") {
+            userAgentDataPlatform = platform;
+          }
+        }
+      }
+    }
+
+    return {
+      platform: navigator.platform,
+      userAgentDataPlatform,
+      userAgent: navigator.userAgent,
+    };
+  });
+
+  const platform =
+    platformInfo.platform || platformInfo.userAgentDataPlatform || platformInfo.userAgent;
+  return /Mac|iPhone|iPad|iPod/i.test(platform) ? "Meta" : "Control";
+};
+
+const createReactGrabPageObject = (
+  page: Page,
+  activationModifierKey: ModifierKey,
+  feedbackModifierKey: ModifierKey,
+): ReactGrabPageObject => {
+  const getOverlayHost = () => page.locator(`[${ATTRIBUTE_NAME}]`).first();
 
   const isOverlayVisible = async () => {
     return page.evaluate(() => {
-      const api = (window as { __REACT_GRAB__?: { isActive: () => boolean } })
-        .__REACT_GRAB__;
+      const api = (window as { __REACT_GRAB__?: { isActive: () => boolean } }).__REACT_GRAB__;
       return api?.isActive() ?? false;
     });
   };
@@ -262,36 +259,59 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
   const waitForActive = async (expectedState: boolean) => {
     await page.waitForFunction(
       (expected) => {
-        const api = (window as { __REACT_GRAB__?: { isActive: () => boolean } })
-          .__REACT_GRAB__;
+        const api = (window as { __REACT_GRAB__?: { isActive: () => boolean } }).__REACT_GRAB__;
         return api?.isActive() === expected;
       },
       expectedState,
-      { timeout: 5000 },
+      { timeout: UI_STATE_TIMEOUT_MS },
     );
   };
 
-  const holdToActivate = async (durationMs = DEFAULT_KEY_HOLD_DURATION_MS) => {
-    await page.click("body");
-    await page.keyboard.down(MODIFIER_KEY);
+  const activateViaKeyboardFrom = async (selector: string) => {
+    await page.click(selector);
+    await page.keyboard.down(activationModifierKey);
     await page.keyboard.down("c");
-    await page.waitForTimeout(durationMs + ACTIVATION_BUFFER_MS);
+    try {
+      await page.evaluate(
+        (settleDelayMs) =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, settleDelayMs);
+          }),
+        KEYBOARD_ACTIVATION_SETTLE_DELAY_MS,
+      );
+    } finally {
+      await page.keyboard.up("c");
+      await page.keyboard.up(activationModifierKey);
+    }
+    await waitForActive(true);
   };
 
   const activate = async () => {
-    await page.evaluate(() => {
-      const api = (window as { __REACT_GRAB__?: { activate: () => void } })
-        .__REACT_GRAB__;
-      api?.activate();
-    });
-    await waitForActive(true);
+    await page.waitForFunction(
+      () => (window as { __REACT_GRAB__?: unknown }).__REACT_GRAB__ !== undefined,
+      undefined,
+      { timeout: UI_STATE_TIMEOUT_MS },
+    );
+    await page.waitForFunction(
+      () => {
+        const api = (
+          window as {
+            __REACT_GRAB__?: {
+              activate: () => void;
+              isActive: () => boolean;
+            };
+          }
+        ).__REACT_GRAB__;
+        if (!api?.isActive()) api?.activate();
+        return api?.isActive() === true;
+      },
+      undefined,
+      { timeout: UI_STATE_TIMEOUT_MS },
+    );
   };
 
   const activateViaKeyboard = async () => {
-    await holdToActivate();
-    await page.keyboard.up("c");
-    await page.keyboard.up(MODIFIER_KEY);
-    await waitForActive(true);
+    await activateViaKeyboardFrom("body");
   };
 
   const deactivate = async () => {
@@ -301,13 +321,15 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
 
   const hoverElement = async (selector: string) => {
     const element = page.locator(selector).first();
-    await element.hover({ force: true });
-    await page.waitForTimeout(100);
+    const position = await getTextInteractionPosition(element);
+    await element.hover({ force: true, position });
+    await page.waitForTimeout(350);
   };
 
   const clickElement = async (selector: string) => {
     const element = page.locator(selector).first();
-    await element.click({ force: true });
+    const position = await getTextInteractionPosition(element);
+    await element.click({ force: true, position });
   };
 
   const dragSelect = async (startSelector: string, endSelector: string) => {
@@ -328,15 +350,41 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
 
     await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(endX, endY, { steps: 10 });
+    await page.mouse.move(endX, endY, { steps: DRAG_SELECT_STEPS });
     await page.mouse.up();
   };
 
-  const getClipboardContent = async () => {
-    return page.evaluate(() => navigator.clipboard.readText());
-  };
+  const getClipboardContent = async () => page.evaluate(() => navigator.clipboard.readText());
 
-  const waitForSelectionBox = async () => {
+  const captureNextClipboardWrites = async () =>
+    page.evaluate(() => {
+      return new Promise<Record<string, string>>((resolve) => {
+        const originalSetData = DataTransfer.prototype.setData;
+        const clipboardWrites: Record<string, string> = {};
+        DataTransfer.prototype.setData = function (type: string, value: string) {
+          clipboardWrites[type] = value;
+          return originalSetData.call(this, type, value);
+        };
+
+        const cleanup = () => {
+          DataTransfer.prototype.setData = originalSetData;
+          resolve(clipboardWrites);
+        };
+
+        const safetyTimeout = setTimeout(cleanup, 5000);
+
+        document.addEventListener(
+          "copy",
+          () => {
+            clearTimeout(safetyTimeout);
+            queueMicrotask(cleanup);
+          },
+          { once: true, capture: true },
+        );
+      });
+    });
+
+  const waitForSelectionBox = async (timeout = 10_000) => {
     await page.waitForFunction(
       () => {
         const api = (
@@ -352,8 +400,51 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         const state = api?.getState();
         return state?.isSelectionBoxVisible || state?.targetElement !== null;
       },
-      { timeout: 2000 },
+      undefined,
+      { timeout },
     );
+  };
+
+  // A single synthetic hover can race scroll-into-view for elements low
+  // in the page, leaving react-grab without a selection. Re-hover (moving
+  // the pointer away first so the move re-fires) until it registers.
+  const hoverUntilSelected = async (selector: string) => {
+    for (let attempt = 1; attempt <= SELECTION_HOVER_ATTEMPTS; attempt++) {
+      if (attempt > 1) await page.mouse.move(0, 0);
+      await hoverElement(selector);
+      try {
+        await waitForSelectionBox(SELECTION_HOVER_TIMEOUT_MS);
+        return;
+      } catch (error) {
+        if (attempt === SELECTION_HOVER_ATTEMPTS) throw error;
+      }
+    }
+  };
+
+  const hoverUntilTargetSelected = async (selector: string) => {
+    for (let attempt = 1; attempt <= SELECTION_HOVER_ATTEMPTS; attempt++) {
+      if (attempt > 1) await page.mouse.move(0, 0);
+      await hoverElement(selector);
+      try {
+        await page.waitForFunction(
+          (targetSelector) => {
+            const api = window.__REACT_GRAB__;
+            const expectedTarget = document.querySelector(targetSelector);
+            const selectedTarget = api?.getState().targetElement;
+            return Boolean(
+              expectedTarget &&
+              selectedTarget &&
+              (selectedTarget === expectedTarget || expectedTarget.contains(selectedTarget)),
+            );
+          },
+          selector,
+          { timeout: SELECTION_HOVER_TIMEOUT_MS },
+        );
+        return;
+      } catch (error) {
+        if (attempt === SELECTION_HOVER_ATTEMPTS) throw error;
+      }
+    }
   };
 
   const waitForSelectionSource = async () => {
@@ -368,7 +459,8 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         ).__REACT_GRAB__;
         return api?.getState()?.selectionFilePath !== null;
       },
-      { timeout: 5000 },
+      undefined,
+      { timeout: UI_STATE_TIMEOUT_MS },
     );
   };
 
@@ -388,10 +480,6 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     await page.keyboard.press("ArrowLeft");
   };
 
-  const pressArrowRight = async () => {
-    await page.keyboard.press("ArrowRight");
-  };
-
   const pressEnter = async () => {
     await page.keyboard.press("Enter");
   };
@@ -401,19 +489,19 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
   };
 
   const pressKeyCombo = async (modifiers: string[], key: string) => {
-    for (const modifier of modifiers) {
-      await page.keyboard.down(modifier);
+    for (const modifierKeyName of modifiers) {
+      await page.keyboard.down(modifierKeyName);
     }
     await page.keyboard.press(key);
-    for (const modifier of [...modifiers].reverse()) {
-      await page.keyboard.up(modifier);
+    for (const modifierKeyName of [...modifiers].reverse()) {
+      await page.keyboard.up(modifierKeyName);
     }
   };
 
   const pressModifierKeyCombo = async (key: string) => {
-    await page.keyboard.down(MODIFIER_KEY);
+    await page.keyboard.down(activationModifierKey);
     await page.keyboard.press(key);
-    await page.keyboard.up(MODIFIER_KEY);
+    await page.keyboard.up(activationModifierKey);
   };
 
   const waitForContextMenu = async (visible: boolean) => {
@@ -424,27 +512,30 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         if (!shadowRoot) return !expectedVisible;
         const root = shadowRoot.querySelector(`[${attrName}]`);
         if (!root) return !expectedVisible;
-        const menuItem = root.querySelector("[data-react-grab-menu-item]");
+        const menuItem = root.querySelector(
+          "[data-react-grab-context-menu] [data-react-grab-menu-item]",
+        );
         return expectedVisible ? menuItem !== null : menuItem === null;
       },
       { attrName: ATTRIBUTE_NAME, expectedVisible: visible },
-      { timeout: 2000 },
+      { timeout: UI_STATE_TIMEOUT_MS },
     );
   };
 
   const rightClickElement = async (selector: string) => {
+    const wasActive = await isOverlayVisible();
     const element = page.locator(selector).first();
-    await element.click({ button: "right", force: true });
-    const isActive = await isOverlayVisible();
-    if (isActive) {
+    const position = await getTextInteractionPosition(element);
+    await element.click({ button: "right", force: true, position });
+    if (wasActive) {
       await waitForContextMenu(true);
     }
   };
 
   const rightClickAtPosition = async (x: number, y: number) => {
+    const wasActive = await isOverlayVisible();
     await page.mouse.click(x, y, { button: "right" });
-    const isActive = await isOverlayVisible();
-    if (isActive) {
+    if (wasActive) {
       await waitForContextMenu(true);
     }
   };
@@ -456,7 +547,9 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       if (!shadowRoot) return false;
       const root = shadowRoot.querySelector(`[${attrName}]`);
       if (!root) return false;
-      const menuItem = root.querySelector("[data-react-grab-menu-item]");
+      const menuItem = root.querySelector(
+        "[data-react-grab-context-menu] [data-react-grab-menu-item]",
+      );
       return menuItem !== null;
     }, ATTRIBUTE_NAME);
   };
@@ -470,10 +563,9 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         const root = shadowRoot.querySelector(`[${attrName}]`);
         if (!root) throw new Error("No inner root found");
         const button = root.querySelector<HTMLButtonElement>(
-          `[data-react-grab-menu-item="${itemLabel.toLowerCase()}"]`,
+          `[data-react-grab-context-menu] [data-react-grab-menu-item="${itemLabel.toLowerCase()}"]`,
         );
-        if (!button)
-          throw new Error(`Context menu item "${itemLabel}" not found`);
+        if (!button) throw new Error(`Context menu item "${itemLabel}" not found`);
         button.click();
       },
       { attrName: ATTRIBUTE_NAME, itemLabel: label },
@@ -502,9 +594,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
           position: null,
         };
 
-      const contextMenu = root.querySelector<HTMLElement>(
-        "[data-react-grab-context-menu]",
-      );
+      const contextMenu = root.querySelector<HTMLElement>("[data-react-grab-context-menu]");
       if (!contextMenu)
         return {
           isVisible: false,
@@ -514,9 +604,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         };
 
       const menuItemButtons = Array.from(
-        contextMenu.querySelectorAll<HTMLButtonElement>(
-          "[data-react-grab-menu-item]",
-        ),
+        contextMenu.querySelectorAll<HTMLButtonElement>("[data-react-grab-menu-item]"),
       );
       const menuItems = menuItemButtons.map((btn) => {
         const item = btn.dataset.reactGrabMenuItem ?? "";
@@ -528,9 +616,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
 
       const style = contextMenu.style;
       const position =
-        style.left && style.top
-          ? { x: parseFloat(style.left), y: parseFloat(style.top) }
-          : null;
+        style.left && style.top ? { x: parseFloat(style.left), y: parseFloat(style.top) } : null;
 
       return { isVisible: true, tagBadgeText, menuItems, position };
     }, ATTRIBUTE_NAME);
@@ -545,7 +631,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         const root = shadowRoot.querySelector(`[${attrName}]`);
         if (!root) return false;
         const button = root.querySelector<HTMLButtonElement>(
-          `[data-react-grab-menu-item="${itemLabel.toLowerCase()}"]`,
+          `[data-react-grab-context-menu] [data-react-grab-menu-item="${itemLabel.toLowerCase()}"]`,
         );
         return button ? !button.disabled : false;
       },
@@ -570,14 +656,10 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     const scrollBefore = await page.evaluate(() => window.scrollY);
     await page.mouse.wheel(0, deltaY);
     await page
-      .waitForFunction(
-        (prevScroll) => window.scrollY !== prevScroll,
-        scrollBefore,
-        { timeout: 2000 },
-      )
-      .catch(() => {
-        // Scroll may not change if at edge of page, that's okay
-      });
+      .waitForFunction((prevScroll) => window.scrollY !== prevScroll, scrollBefore, {
+        timeout: 2000,
+      })
+      .catch(() => undefined);
   };
 
   const waitForPromptMode = async (active: boolean) => {
@@ -591,17 +673,19 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         return api?.getState()?.isPromptMode === expected;
       },
       active,
-      { timeout: 2000 },
+      { timeout: UI_STATE_TIMEOUT_MS },
     );
   };
 
   const enterPromptMode = async (selector: string) => {
     await activate();
-    await hoverElement(selector);
-    await waitForSelectionBox();
+    await hoverUntilSelected(selector);
     await rightClickElement(selector);
-    await clickContextMenuItem("Edit");
+    await clickContextMenuItem("Comment");
     await waitForPromptMode(true);
+    const promptInput = page.locator("textarea[data-react-grab-input]");
+    await promptInput.waitFor({ state: "visible", timeout: UI_STATE_TIMEOUT_MS });
+    await promptInput.focus();
   };
 
   const isPromptModeActive = async (): Promise<boolean> => {
@@ -622,14 +706,12 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       if (!shadowRoot) return;
       const root = shadowRoot.querySelector(`[${attrName}]`);
       if (!root) return;
-      const textarea = root.querySelector<HTMLTextAreaElement>(
-        "[data-react-grab-input]",
-      );
+      const textarea = root.querySelector<HTMLTextAreaElement>("[data-react-grab-input]");
       if (textarea) {
         textarea.focus();
       }
     }, ATTRIBUTE_NAME);
-    await page.keyboard.type(text);
+    await page.keyboard.insertText(text);
   };
 
   const getInputValue = async (): Promise<string> => {
@@ -650,23 +732,6 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     await page.keyboard.press("Enter");
   };
 
-  const clearInput = async () => {
-    await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return;
-      const textarea = root.querySelector(
-        "textarea[data-react-grab-ignore-events]",
-      ) as HTMLTextAreaElement;
-      if (textarea) {
-        textarea.value = "";
-        textarea.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-    }, ATTRIBUTE_NAME);
-  };
-
   const isPendingDismissVisible = async (): Promise<boolean> => {
     return page.evaluate((attrName) => {
       const host = document.querySelector(`[${attrName}]`);
@@ -674,9 +739,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       if (!shadowRoot) return false;
       const root = shadowRoot.querySelector(`[${attrName}]`);
       if (!root) return false;
-      const discardPrompt = root.querySelector(
-        "[data-react-grab-discard-prompt]",
-      );
+      const discardPrompt = root.querySelector("[data-react-grab-discard-prompt]");
       return discardPrompt !== null;
     }, ATTRIBUTE_NAME);
   };
@@ -688,9 +751,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       if (!shadowRoot) return false;
       const root = shadowRoot.querySelector(`[${attrName}]`);
       if (!root) return false;
-      const toolbar = root.querySelector<HTMLElement>(
-        "[data-react-grab-toolbar]",
-      );
+      const toolbar = root.querySelector<HTMLElement>("[data-react-grab-toolbar]");
       if (!toolbar) return false;
       const computedStyle = window.getComputedStyle(toolbar);
       return computedStyle.opacity !== "0" && computedStyle.display !== "none";
@@ -704,9 +765,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       if (!shadowRoot) return false;
       const root = shadowRoot.querySelector(`[${attrName}]`);
       if (!root) return false;
-      const toolbar = root.querySelector<HTMLElement>(
-        "[data-react-grab-toolbar]",
-      );
+      const toolbar = root.querySelector<HTMLElement>("[data-react-grab-toolbar]");
       if (!toolbar) return false;
       const computedStyle = window.getComputedStyle(toolbar);
       return computedStyle.cursor === "pointer";
@@ -714,7 +773,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
   };
 
   const getToolbarInfo = async (): Promise<ToolbarInfo> => {
-    const defaultInfo: ToolbarInfo = {
+    const defaultToolbarInfo: ToolbarInfo = {
       isVisible: false,
       isCollapsed: false,
       isVertical: false,
@@ -724,16 +783,14 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     };
 
     return page.evaluate(
-      ({ attrName, fallback }) => {
+      ({ attrName, fallback, snapEdgeThresholdPx }) => {
         const host = document.querySelector(`[${attrName}]`);
         const shadowRoot = host?.shadowRoot;
         if (!shadowRoot) return fallback;
         const root = shadowRoot.querySelector(`[${attrName}]`);
         if (!root) return fallback;
 
-        const toolbar = root.querySelector<HTMLElement>(
-          "[data-react-grab-toolbar]",
-        );
+        const toolbar = root.querySelector<HTMLElement>("[data-react-grab-toolbar]");
         if (!toolbar) return fallback;
 
         const computedStyle = window.getComputedStyle(toolbar);
@@ -750,25 +807,26 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
 
         const viewportWidth = window.innerWidth;
         const viewportHeight = window.innerHeight;
-        const rect = toolbar.getBoundingClientRect();
-        const dimensions = { width: rect.width, height: rect.height };
+        const toolbarBounds = toolbar.getBoundingClientRect();
+        const dimensions = { width: toolbarBounds.width, height: toolbarBounds.height };
 
         let snapEdge: string | null = null;
         if (position) {
-          const SNAP_THRESHOLD = 30;
-          if (position.y <= SNAP_THRESHOLD) snapEdge = "top";
-          else if (position.y + rect.height >= viewportHeight - SNAP_THRESHOLD)
+          if (position.y <= snapEdgeThresholdPx) snapEdge = "top";
+          else if (position.y + toolbarBounds.height >= viewportHeight - snapEdgeThresholdPx)
             snapEdge = "bottom";
-          else if (position.x <= SNAP_THRESHOLD) snapEdge = "left";
-          else if (position.x + rect.width >= viewportWidth - SNAP_THRESHOLD)
+          else if (position.x <= snapEdgeThresholdPx) snapEdge = "left";
+          else if (position.x + toolbarBounds.width >= viewportWidth - snapEdgeThresholdPx)
             snapEdge = "right";
         }
 
         const isCollapsed = computedStyle.cursor === "pointer";
 
-        const innerDiv = toolbar.querySelector("div");
-        const innerStyle = innerDiv ? window.getComputedStyle(innerDiv) : null;
-        const isVertical = innerStyle?.flexDirection === "column";
+        const toolbarInnerElement = toolbar.querySelector("div");
+        const toolbarInnerStyle = toolbarInnerElement
+          ? window.getComputedStyle(toolbarInnerElement)
+          : null;
+        const isVertical = toolbarInnerStyle?.flexDirection === "column";
 
         return {
           isVisible: computedStyle.opacity !== "0",
@@ -779,7 +837,11 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
           snapEdge,
         };
       },
-      { attrName: ATTRIBUTE_NAME, fallback: defaultInfo },
+      {
+        attrName: ATTRIBUTE_NAME,
+        fallback: defaultToolbarInfo,
+        snapEdgeThresholdPx: TOOLBAR_SNAP_EDGE_THRESHOLD_PX,
+      },
     );
   };
 
@@ -799,6 +861,48 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     await waitForActive(!wasActive);
   };
 
+  const clickToolbarAction = async (actionId: string) => {
+    const wasActive = await isOverlayVisible();
+    await page.evaluate(
+      ({ attrName, id }) => {
+        const host = document.querySelector(`[${attrName}]`);
+        const shadowRoot = host?.shadowRoot;
+        if (!shadowRoot) return;
+        const root = shadowRoot.querySelector(`[${attrName}]`);
+        if (!root) return;
+        const actionButton = root.querySelector<HTMLButtonElement>(
+          `[data-react-grab-toolbar-action="${id}"]`,
+        );
+        actionButton?.click();
+      },
+      { attrName: ATTRIBUTE_NAME, id: actionId },
+    );
+    // From inactive, the click activates. While already active it either
+    // switches the pending action (stays active) or toggles off, so callers
+    // assert the resulting state explicitly rather than waiting on a flip here.
+    if (!wasActive) {
+      await waitForActive(true);
+    }
+  };
+
+  const getToolbarActionPressed = async (actionId: string): Promise<boolean | null> => {
+    return page.evaluate(
+      ({ attrName, id }) => {
+        const host = document.querySelector(`[${attrName}]`);
+        const shadowRoot = host?.shadowRoot;
+        if (!shadowRoot) return null;
+        const root = shadowRoot.querySelector(`[${attrName}]`);
+        if (!root) return null;
+        const actionButton = root.querySelector<HTMLButtonElement>(
+          `[data-react-grab-toolbar-action="${id}"]`,
+        );
+        if (!actionButton) return null;
+        return actionButton.getAttribute("aria-pressed") === "true";
+      },
+      { attrName: ATTRIBUTE_NAME, id: actionId },
+    );
+  };
+
   const clickToolbarCollapse = async () => {
     await page.evaluate((attrName) => {
       const host = document.querySelector(`[${attrName}]`);
@@ -813,56 +917,40 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     }, ATTRIBUTE_NAME);
   };
 
-  const clickToolbarEnabled = async () => {
-    await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return;
-      const enabledButton = root.querySelector<HTMLButtonElement>(
-        "[data-react-grab-toolbar-enabled]",
-      );
-      enabledButton?.click();
-    }, ATTRIBUTE_NAME);
-  };
-
   const dragToolbar = async (deltaX: number, deltaY: number) => {
-    const toolbarRect = await page.evaluate((attrName) => {
+    const toolbarBounds = await page.evaluate((attrName) => {
       const host = document.querySelector(`[${attrName}]`);
       const shadowRoot = host?.shadowRoot;
       if (!shadowRoot) return null;
       const root = shadowRoot.querySelector(`[${attrName}]`);
       if (!root) return null;
-      const toolbar = root.querySelector<HTMLElement>(
-        "[data-react-grab-toolbar]",
-      );
+      const toolbar = root.querySelector<HTMLElement>("[data-react-grab-toolbar]");
       if (!toolbar) return null;
-      const rect = toolbar.getBoundingClientRect();
-      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      const toolbarBounds = toolbar.getBoundingClientRect();
+      return {
+        x: toolbarBounds.x,
+        y: toolbarBounds.y,
+        width: toolbarBounds.width,
+        height: toolbarBounds.height,
+      };
     }, ATTRIBUTE_NAME);
 
-    if (!toolbarRect) return;
+    if (!toolbarBounds) return;
 
-    const startX = toolbarRect.x + toolbarRect.width / 2;
-    const startY = toolbarRect.y + toolbarRect.height / 2;
+    const startX = toolbarBounds.x + toolbarBounds.width / 2;
+    const startY = toolbarBounds.y + toolbarBounds.height / 2;
     const endX = startX + deltaX;
     const endY = startY + deltaY;
 
     await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(endX, endY, { steps: 10 });
+    await page.mouse.move(endX, endY, { steps: DRAG_SELECT_STEPS });
     await page.mouse.up();
-    // HACK: Wait for snap animation to complete
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(TOOLBAR_SNAP_ANIMATION_WAIT_MS);
   };
 
-  const dragToolbarFromButton = async (
-    buttonSelector: string,
-    deltaX: number,
-    deltaY: number,
-  ) => {
-    const buttonRect = await page.evaluate(
+  const dragToolbarFromButton = async (buttonSelector: string, deltaX: number, deltaY: number) => {
+    const buttonBounds = await page.evaluate(
       ({ attrName, selector }) => {
         const host = document.querySelector(`[${attrName}]`);
         const shadowRoot = host?.shadowRoot;
@@ -871,292 +959,105 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         if (!root) return null;
         const button = root.querySelector<HTMLElement>(selector);
         if (!button) return null;
-        const rect = button.getBoundingClientRect();
-        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        const buttonBounds = button.getBoundingClientRect();
+        return {
+          x: buttonBounds.x,
+          y: buttonBounds.y,
+          width: buttonBounds.width,
+          height: buttonBounds.height,
+        };
       },
       { attrName: ATTRIBUTE_NAME, selector: buttonSelector },
     );
 
-    if (!buttonRect) return;
+    if (!buttonBounds) return;
 
-    const startX = buttonRect.x + buttonRect.width / 2;
-    const startY = buttonRect.y + buttonRect.height / 2;
+    const startX = buttonBounds.x + buttonBounds.width / 2;
+    const startY = buttonBounds.y + buttonBounds.height / 2;
     const endX = startX + deltaX;
     const endY = startY + deltaY;
 
     await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(endX, endY, { steps: 10 });
+    await page.mouse.move(endX, endY, { steps: DRAG_SELECT_STEPS });
     await page.mouse.up();
-    // HACK: Wait for snap animation to complete
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(TOOLBAR_SNAP_ANIMATION_WAIT_MS);
   };
 
-  const isHistoryButtonVisible = async (): Promise<boolean> => {
+  const rightClickToolbarToggle = async () => {
+    await page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot) return;
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return;
+      const toggleButton = root.querySelector<HTMLElement>("[data-react-grab-toolbar-toggle]");
+      if (!toggleButton) return;
+      toggleButton.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    }, ATTRIBUTE_NAME);
+    await page.waitForTimeout(200);
+  };
+
+  const isToolbarMenuVisible = async (): Promise<boolean> => {
     return page.evaluate((attrName) => {
       const host = document.querySelector(`[${attrName}]`);
       const shadowRoot = host?.shadowRoot;
       if (!shadowRoot) return false;
       const root = shadowRoot.querySelector(`[${attrName}]`);
       if (!root) return false;
-      const historyButton = root.querySelector<HTMLElement>(
-        "[data-react-grab-toolbar-history]",
-      );
-      if (!historyButton) return false;
-      const gridParent = historyButton.parentElement?.parentElement;
-      if (!gridParent) return false;
-      const computedStyle = window.getComputedStyle(gridParent);
-      return computedStyle.opacity !== "0";
+      const dropdowns = root.querySelectorAll<HTMLElement>("[data-react-grab-toolbar-menu]");
+      for (let dropdownIndex = 0; dropdownIndex < dropdowns.length; dropdownIndex++) {
+        const dropdown = dropdowns[dropdownIndex];
+        if (
+          dropdown.classList.contains("fixed") &&
+          getComputedStyle(dropdown).pointerEvents !== "none"
+        ) {
+          return true;
+        }
+      }
+      return false;
     }, ATTRIBUTE_NAME);
   };
 
-  const hasUnreadHistoryIndicator = async (): Promise<boolean> => {
+  const getToolbarMenuItemLabels = async (): Promise<string[]> => {
     return page.evaluate((attrName) => {
       const host = document.querySelector(`[${attrName}]`);
       const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return false;
+      if (!shadowRoot) return [];
       const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return false;
-      const historyButton = root.querySelector(
-        "[data-react-grab-toolbar-history]",
-      );
-      if (!historyButton) return false;
-      const unreadDot = historyButton.querySelector('path[fill="#404040"]');
-      return unreadDot !== null;
+      if (!root) return [];
+      const dropdowns = root.querySelectorAll<HTMLElement>("[data-react-grab-toolbar-menu]");
+      for (const dropdown of dropdowns) {
+        if (!dropdown.classList.contains("fixed")) continue;
+        const items = dropdown.querySelectorAll<HTMLButtonElement>("[data-react-grab-menu-item]");
+        return Array.from(items).map((item) => item.textContent?.trim() ?? "");
+      }
+      return [];
     }, ATTRIBUTE_NAME);
   };
 
-  const waitForHistoryDropdown = async (visible: boolean) => {
-    await page.waitForFunction(
-      ({ attrName, expectedVisible }) => {
-        const host = document.querySelector(`[${attrName}]`);
-        const shadowRoot = host?.shadowRoot;
-        if (!shadowRoot) return !expectedVisible;
-        const root = shadowRoot.querySelector(`[${attrName}]`);
-        if (!root) return !expectedVisible;
-        const dropdown = root.querySelector<HTMLElement>(
-          "[data-react-grab-history-dropdown]",
-        );
-        if (!expectedVisible) return dropdown === null;
-        if (!dropdown) return false;
-        return getComputedStyle(dropdown).pointerEvents !== "none";
-      },
-      { attrName: ATTRIBUTE_NAME, expectedVisible: visible },
-      { timeout: 2000 },
-    );
-  };
-
-  const clickShadowRootButton = async (selector: string) => {
+  const clickToolbarMenuItem = async (actionId: string) => {
     await page.evaluate(
-      ({ attrName, buttonSelector }) => {
+      ({ attrName, itemId }) => {
         const host = document.querySelector(`[${attrName}]`);
         const shadowRoot = host?.shadowRoot;
         if (!shadowRoot) return;
         const root = shadowRoot.querySelector(`[${attrName}]`);
         if (!root) return;
-        root.querySelector<HTMLButtonElement>(buttonSelector)?.click();
+        const dropdowns = root.querySelectorAll<HTMLElement>("[data-react-grab-toolbar-menu]");
+        for (const dropdown of dropdowns) {
+          if (!dropdown.classList.contains("fixed")) continue;
+          const button = dropdown.querySelector<HTMLButtonElement>(
+            `[data-react-grab-menu-item="${itemId}"]`,
+          );
+          button?.click();
+          return;
+        }
       },
-      { attrName: ATTRIBUTE_NAME, buttonSelector: selector },
+      { attrName: ATTRIBUTE_NAME, itemId: actionId },
     );
-  };
-
-  const clickHistoryButton = async () => {
-    const wasOpen = await isHistoryDropdownVisible();
-    await clickShadowRootButton("[data-react-grab-toolbar-history]");
-    await waitForHistoryDropdown(!wasOpen);
-  };
-
-  const isHistoryDropdownVisible = async (): Promise<boolean> => {
-    return page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return false;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return false;
-      const dropdown = root.querySelector("[data-react-grab-history-dropdown]");
-      return dropdown !== null;
-    }, ATTRIBUTE_NAME);
-  };
-
-  const getHistoryDropdownInfo = async (): Promise<HistoryDropdownInfo> => {
-    return page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return { isVisible: false, itemCount: 0 };
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return { isVisible: false, itemCount: 0 };
-      const dropdown = root.querySelector("[data-react-grab-history-dropdown]");
-      if (!dropdown) return { isVisible: false, itemCount: 0 };
-
-      return {
-        isVisible: true,
-        itemCount: dropdown.querySelectorAll("[data-react-grab-history-item]")
-          .length,
-      };
-    }, ATTRIBUTE_NAME);
-  };
-
-  const clickHistoryItem = async (index: number) => {
-    await page.evaluate(
-      ({ attrName, itemIndex }) => {
-        const host = document.querySelector(`[${attrName}]`);
-        const shadowRoot = host?.shadowRoot;
-        if (!shadowRoot) return;
-        const root = shadowRoot.querySelector(`[${attrName}]`);
-        if (!root) return;
-        const items = root.querySelectorAll<HTMLButtonElement>(
-          "[data-react-grab-history-item]",
-        );
-        items[itemIndex]?.click();
-      },
-      { attrName: ATTRIBUTE_NAME, itemIndex: index },
-    );
-  };
-
-  const clickHistoryItemRemove = async (index: number) => {
-    await page.evaluate(
-      ({ attrName, itemIndex }) => {
-        const host = document.querySelector(`[${attrName}]`);
-        const shadowRoot = host?.shadowRoot;
-        if (!shadowRoot) return;
-        const root = shadowRoot.querySelector(`[${attrName}]`);
-        if (!root) return;
-        const items = root.querySelectorAll("[data-react-grab-history-item]");
-        const item = items[itemIndex];
-        if (!item) return;
-        const removeButton = item.querySelector<HTMLButtonElement>(
-          "[data-react-grab-history-item-remove]",
-        );
-        removeButton?.click();
-      },
-      { attrName: ATTRIBUTE_NAME, itemIndex: index },
-    );
-  };
-
-  const clickHistoryItemCopy = async (index: number) => {
-    await page.evaluate(
-      ({ attrName, itemIndex }) => {
-        const host = document.querySelector(`[${attrName}]`);
-        const shadowRoot = host?.shadowRoot;
-        if (!shadowRoot) return;
-        const root = shadowRoot.querySelector(`[${attrName}]`);
-        if (!root) return;
-        const items = root.querySelectorAll("[data-react-grab-history-item]");
-        const item = items[itemIndex];
-        if (!item) return;
-        const copyButton = item.querySelector<HTMLButtonElement>(
-          "[data-react-grab-history-item-copy]",
-        );
-        copyButton?.click();
-      },
-      { attrName: ATTRIBUTE_NAME, itemIndex: index },
-    );
-  };
-
-  const clickHistoryCopyAll = async () => {
-    await clickShadowRootButton("[data-react-grab-history-copy-all]");
-  };
-
-  const clickHistoryClear = async () => {
-    await clickShadowRootButton("[data-react-grab-history-clear]");
-    await waitForHistoryDropdown(false);
-  };
-
-  const hoverHistoryItem = async (index: number) => {
-    const itemRect = await page.evaluate(
-      ({ attrName, itemIndex }) => {
-        const host = document.querySelector(`[${attrName}]`);
-        const shadowRoot = host?.shadowRoot;
-        if (!shadowRoot) return null;
-        const root = shadowRoot.querySelector(`[${attrName}]`);
-        if (!root) return null;
-        const items = root.querySelectorAll("[data-react-grab-history-item]");
-        const button = items[itemIndex];
-        if (!button) return null;
-        const rect = button.getBoundingClientRect();
-        return {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        };
-      },
-      { attrName: ATTRIBUTE_NAME, itemIndex: index },
-    );
-    if (itemRect) {
-      await page.mouse.move(
-        itemRect.x + itemRect.width / 2,
-        itemRect.y + itemRect.height / 2,
-      );
-      await page.waitForTimeout(100);
-    }
-  };
-
-  const hoverHistoryButton = async () => {
-    const buttonRect = await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return null;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return null;
-      const button = root.querySelector<HTMLElement>(
-        "[data-react-grab-toolbar-history]",
-      );
-      if (!button) return null;
-      const rect = button.getBoundingClientRect();
-      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-    }, ATTRIBUTE_NAME);
-    if (buttonRect) {
-      await page.mouse.move(
-        buttonRect.x + buttonRect.width / 2,
-        buttonRect.y + buttonRect.height / 2,
-      );
-      await page.waitForTimeout(100);
-    }
-  };
-
-  const hoverCopyAllButton = async () => {
-    const buttonRect = await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return null;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return null;
-      const button = root.querySelector<HTMLElement>(
-        "[data-react-grab-history-copy-all]",
-      );
-      if (!button) return null;
-      const rect = button.getBoundingClientRect();
-      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-    }, ATTRIBUTE_NAME);
-    if (buttonRect) {
-      await page.mouse.move(
-        buttonRect.x + buttonRect.width / 2,
-        buttonRect.y + buttonRect.height / 2,
-      );
-      await page.waitForTimeout(100);
-    }
-  };
-
-  const getHistoryDropdownPosition = async (): Promise<{
-    left: number;
-    top: number;
-  } | null> => {
-    return page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return null;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return null;
-      const dropdown = root.querySelector<HTMLElement>(
-        "[data-react-grab-history-dropdown]",
-      );
-      if (!dropdown) return null;
-      return {
-        left: parseFloat(dropdown.style.left),
-        top: parseFloat(dropdown.style.top),
-      };
-    }, ATTRIBUTE_NAME);
   };
 
   const getSelectionLabelInfo = async (): Promise<SelectionLabelInfo> => {
@@ -1204,11 +1105,11 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         if (spanText.includes("elements")) {
           const match = spanText.match(/(\d+)\s*elements/);
           elementsCount = match ? parseInt(match[1], 10) : null;
-        } else if (spanText.includes(".")) {
+        } else if (spanText.includes(".") && !spanText.startsWith(".")) {
           const parts = spanText.split(".");
           componentName = parts[0] ?? null;
           tagName = parts[1] ?? null;
-        } else if (spanText && !spanText.includes("Editing") && !tagName) {
+        } else if (spanText && !tagName) {
           tagName = spanText;
         }
       }
@@ -1227,40 +1128,33 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     }, ATTRIBUTE_NAME);
   };
 
-  const getSelectionLabelBounds =
-    async (): Promise<SelectionLabelBounds | null> => {
-      return page.evaluate((attrName) => {
-        const host = document.querySelector(`[${attrName}]`);
-        const shadowRoot = host?.shadowRoot;
-        if (!shadowRoot) return null;
-        const root = shadowRoot.querySelector(`[${attrName}]`);
-        if (!root) return null;
+  const getSelectionLabelBounds = async (): Promise<SelectionLabelBounds | null> => {
+    return page.evaluate((attrName) => {
+      const host = document.querySelector(`[${attrName}]`);
+      const shadowRoot = host?.shadowRoot;
+      if (!shadowRoot) return null;
+      const root = shadowRoot.querySelector(`[${attrName}]`);
+      if (!root) return null;
 
-        const label = root.querySelector<HTMLElement>(
-          "[data-react-grab-selection-label]",
-        );
-        if (!label) return null;
+      const label = root.querySelector<HTMLElement>("[data-react-grab-selection-label]");
+      if (!label) return null;
 
-        const toRect = (rect: DOMRect) => ({
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        });
+      const toRect = (rect: DOMRect) => ({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      });
 
-        const arrowElement = label.querySelector<HTMLElement>(
-          "[data-react-grab-arrow]",
-        );
+      const arrowElement = label.querySelector<HTMLElement>("[data-react-grab-arrow]");
 
-        return {
-          label: toRect(label.getBoundingClientRect()),
-          arrow: arrowElement
-            ? toRect(arrowElement.getBoundingClientRect())
-            : null,
-          viewport: { width: window.innerWidth, height: window.innerHeight },
-        };
-      }, ATTRIBUTE_NAME);
-    };
+      return {
+        label: toRect(label.getBoundingClientRect()),
+        arrow: arrowElement ? toRect(arrowElement.getBoundingClientRect()) : null,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      };
+    }, ATTRIBUTE_NAME);
+  };
 
   const isSelectionLabelVisible = async (): Promise<boolean> => {
     const info = await getSelectionLabelInfo();
@@ -1291,74 +1185,29 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       const root = shadowRoot.querySelector(`[${attrName}]`);
       if (!root) return null;
 
-      const pulsingElements = Array.from(
-        root.querySelectorAll(".animate-pulse"),
-      );
-      for (let i = 0; i < pulsingElements.length; i++) {
-        const element = pulsingElements[i];
+      const pulsingElements = Array.from(root.querySelectorAll(".animate-pulse"));
+      for (
+        let pulsingElementIndex = 0;
+        pulsingElementIndex < pulsingElements.length;
+        pulsingElementIndex++
+      ) {
+        const element = pulsingElements[pulsingElementIndex];
         const text = element.textContent?.trim();
         if (text) return text;
       }
 
       const completedTexts = ["Copied", "Completed", "Done"];
-      for (let i = 0; i < completedTexts.length; i++) {
-        const text = completedTexts[i];
+      for (
+        let completedTextIndex = 0;
+        completedTextIndex < completedTexts.length;
+        completedTextIndex++
+      ) {
+        const text = completedTexts[completedTextIndex];
         if (root.textContent?.includes(text)) return text;
       }
 
       return null;
     }, ATTRIBUTE_NAME);
-  };
-
-  const getCrosshairInfo = async (): Promise<CrosshairInfo> => {
-    return page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return { isVisible: false, position: null };
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return { isVisible: false, position: null };
-
-      const crosshairElements = Array.from(
-        root.querySelectorAll("div[style*='pointer-events: none']"),
-      );
-      for (let i = 0; i < crosshairElements.length; i++) {
-        const element = crosshairElements[i] as HTMLElement;
-        const style = element.style;
-        if (
-          style.position === "fixed" &&
-          (style.width === "1px" ||
-            style.height === "1px" ||
-            style.width === "100%" ||
-            style.height === "100%")
-        ) {
-          const transform = style.transform;
-          const match = transform?.match(/translate\(([^,]+)px,\s*([^)]+)px\)/);
-          if (match) {
-            return {
-              isVisible: true,
-              position: { x: parseFloat(match[1]), y: parseFloat(match[2]) },
-            };
-          }
-        }
-      }
-      return { isVisible: false, position: null };
-    }, ATTRIBUTE_NAME);
-  };
-
-  const isCrosshairVisible = async (): Promise<boolean> => {
-    return page.evaluate(() => {
-      const api = (
-        window as {
-          __REACT_GRAB__?: {
-            getState: () => {
-              isCrosshairVisible: boolean;
-            };
-          };
-        }
-      ).__REACT_GRAB__;
-
-      return api?.getState()?.isCrosshairVisible ?? false;
-    });
   };
 
   const getGrabbedBoxInfo = async (): Promise<GrabbedBoxInfo> => {
@@ -1483,19 +1332,28 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       ).__REACT_GRAB__;
       const state = api?.getState();
       if (!state?.isSelectionBoxVisible || !state?.targetElement) return null;
-      const rect = state.targetElement.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      const targetBounds = state.targetElement.getBoundingClientRect();
+      if (targetBounds.width > 0 && targetBounds.height > 0) {
+        return {
+          x: targetBounds.x,
+          y: targetBounds.y,
+          width: targetBounds.width,
+          height: targetBounds.height,
+        };
       }
       return null;
     });
   };
 
+  const getTargetTestId = async (): Promise<string | null> =>
+    page.evaluate(
+      () => window.__REACT_GRAB__?.getState().targetElement?.getAttribute("data-testid") ?? null,
+    );
+
   const getState = async (): Promise<ReactGrabState> => {
     return page.evaluate(() => {
-      const api = (
-        window as { __REACT_GRAB__?: { getState: () => ReactGrabState } }
-      ).__REACT_GRAB__;
+      const api = (window as { __REACT_GRAB__?: { getState: () => ReactGrabState } })
+        .__REACT_GRAB__;
       const state = api?.getState();
       return (
         state ?? {
@@ -1515,8 +1373,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
   const toggle = async () => {
     const wasActive = await isOverlayVisible();
     await page.evaluate(() => {
-      const api = (window as { __REACT_GRAB__?: { toggle: () => void } })
-        .__REACT_GRAB__;
+      const api = (window as { __REACT_GRAB__?: { toggle: () => void } }).__REACT_GRAB__;
       api?.toggle();
     });
     await waitForActive(!wasActive);
@@ -1524,8 +1381,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
 
   const dispose = async () => {
     await page.evaluate(() => {
-      const api = (window as { __REACT_GRAB__?: { dispose: () => void } })
-        .__REACT_GRAB__;
+      const api = (window as { __REACT_GRAB__?: { dispose: () => void } }).__REACT_GRAB__;
       api?.dispose();
     });
   };
@@ -1543,42 +1399,29 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     }, selector);
   };
 
-  const setAgent = async (options: Record<string, unknown>) => {
-    await page.evaluate((opts) => {
-      const api = (
-        window as {
-          __REACT_GRAB__?: {
-            unregisterPlugin: (name: string) => void;
-            registerPlugin: (plugin: {
-              name: string;
-              actions: Array<Record<string, unknown>>;
-            }) => void;
-          };
-        }
-      ).__REACT_GRAB__;
-      api?.unregisterPlugin("test-agent");
-      const agent = opts;
-      api?.registerPlugin({
-        name: "test-agent",
+  const registerCommentAction = async () => {
+    await page.evaluate(() => {
+      const api = window.__REACT_GRAB__;
+      if (!api || api.getPlugins().includes("comment")) return;
+      api.registerPlugin({
+        name: "comment",
         actions: [
           {
-            id: "edit-with-test-agent",
-            label: "Edit",
+            id: "comment",
+            label: "Comment",
             shortcut: "Enter",
-            onAction: (context: {
-              enterPromptMode?: (agent?: Record<string, unknown>) => void;
-            }) => {
-              context.enterPromptMode?.(agent);
+            showInToolbarMenu: true,
+            onAction: (context) => {
+              context.enterPromptMode?.();
             },
-            agent,
           },
         ],
       });
-    }, options);
+    });
   };
 
   const updateOptions = async (options: Record<string, unknown>) => {
-    await page.evaluate((opts) => {
+    await page.evaluate((optionUpdates) => {
       const api = (
         window as {
           __REACT_GRAB__?: {
@@ -1605,7 +1448,6 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         "onPromptModeChange",
         "onSelectionBox",
         "onDragBox",
-        "onCrosshair",
         "onGrabbedBox",
         "onContextMenu",
         "onOpenFile",
@@ -1616,13 +1458,13 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
       const hooks: Record<string, unknown> = {};
       const regularOpts: Record<string, unknown> = {};
 
-      for (const [key, value] of Object.entries(opts)) {
-        if (pluginKeys.includes(key)) {
-          pluginOpts[key] = value;
-        } else if (hookKeys.includes(key)) {
-          hooks[key] = value;
+      for (const [optionKey, optionValue] of Object.entries(optionUpdates)) {
+        if (pluginKeys.includes(optionKey)) {
+          pluginOpts[optionKey] = optionValue;
+        } else if (hookKeys.includes(optionKey)) {
+          hooks[optionKey] = optionValue;
         } else {
-          regularOpts[key] = value;
+          regularOpts[optionKey] = optionValue;
         }
       }
 
@@ -1642,286 +1484,24 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
   };
 
   const reinitialize = async (options?: Record<string, unknown>) => {
-    await page.evaluate((opts) => {
-      const existingApi = (
-        window as { __REACT_GRAB__?: { dispose: () => void } }
-      ).__REACT_GRAB__;
-      existingApi?.dispose();
-
-      const initFn = (
-        window as { initReactGrab?: (o?: Record<string, unknown>) => void }
-      ).initReactGrab;
-      initFn?.(opts);
+    const didInstallFreshApi = await page.evaluate((initialOptions) => {
+      const targetWindow = window as ReinitializableWindow;
+      const previousApi = targetWindow.__REACT_GRAB__;
+      previousApi?.dispose();
+      const initializedApi = targetWindow.initReactGrab?.(initialOptions);
+      if (!initializedApi) return false;
+      targetWindow.__REACT_GRAB__ = initializedApi;
+      return initializedApi !== previousApi;
     }, options);
     await page.waitForFunction(
       () => {
         const api = (window as { __REACT_GRAB__?: unknown }).__REACT_GRAB__;
         return api !== undefined;
       },
+      undefined,
       { timeout: 5000 },
     );
-  };
-
-  const setupMockAgent = async (options?: {
-    delay?: number;
-    error?: string;
-    statusUpdates?: string[];
-  }) => {
-    await page.evaluate((opts) => {
-      const delay = opts?.delay ?? 500;
-      const error = opts?.error;
-      const statusUpdates = opts?.statusUpdates ?? [
-        "Processing...",
-        "Almost done...",
-      ];
-
-      const mockProvider = {
-        async *send() {
-          for (let i = 0; i < statusUpdates.length; i++) {
-            yield statusUpdates[i];
-            await new Promise((resolve) =>
-              setTimeout(resolve, delay / statusUpdates.length),
-            );
-          }
-          if (error) {
-            throw new Error(error);
-          }
-          yield "Completed";
-        },
-        supportsFollowUp: true,
-        undo: async () => {},
-        canUndo: () => true,
-        redo: async () => {},
-        canRedo: () => true,
-      };
-
-      const api = (
-        window as {
-          __REACT_GRAB__?: {
-            unregisterPlugin: (name: string) => void;
-            registerPlugin: (plugin: {
-              name: string;
-              actions: Array<Record<string, unknown>>;
-            }) => void;
-          };
-        }
-      ).__REACT_GRAB__;
-      api?.unregisterPlugin("mock-agent");
-      const agent = { provider: mockProvider };
-      api?.registerPlugin({
-        name: "mock-agent",
-        actions: [
-          {
-            id: "edit-with-mock-agent",
-            label: "Edit",
-            shortcut: "Enter",
-            onAction: (context: {
-              enterPromptMode?: (agent?: Record<string, unknown>) => void;
-            }) => {
-              context.enterPromptMode?.(agent);
-            },
-            agent,
-          },
-        ],
-      });
-    }, options);
-  };
-
-  const getAgentSessions = async (): Promise<AgentSessionInfo[]> => {
-    return page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return [];
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return [];
-
-      const sessions: AgentSessionInfo[] = [];
-      const sessionElements = root.querySelectorAll(
-        "[data-react-grab-ignore-events]",
-      );
-
-      sessionElements.forEach((element) => {
-        const textContent = element.textContent ?? "";
-        if (
-          textContent.includes("Processing") ||
-          textContent.includes("Completed") ||
-          textContent.includes("Error")
-        ) {
-          const statusMatch = textContent.match(
-            /(Processing|Completed|Error|Grabbing)/,
-          );
-          sessions.push({
-            id: `session-${sessions.length}`,
-            status: statusMatch?.[1] ?? "unknown",
-            isStreaming:
-              textContent.includes("Processing") ||
-              textContent.includes("Grabbing"),
-            error: textContent.includes("Error") ? textContent : null,
-            prompt: "",
-          });
-        }
-      });
-
-      return sessions;
-    }, ATTRIBUTE_NAME);
-  };
-
-  const isAgentSessionVisible = async (): Promise<boolean> => {
-    const sessions = await getAgentSessions();
-    return sessions.length > 0;
-  };
-
-  const waitForAgentSession = async (timeout = 5000) => {
-    await page.waitForFunction(
-      (attrName) => {
-        const host = document.querySelector(`[${attrName}]`);
-        const shadowRoot = host?.shadowRoot;
-        if (!shadowRoot) return false;
-        const root = shadowRoot.querySelector(`[${attrName}]`);
-        if (!root) return false;
-        const sessionElements = Array.from(
-          root.querySelectorAll("[data-react-grab-ignore-events]"),
-        );
-        for (let i = 0; i < sessionElements.length; i++) {
-          const text = sessionElements[i].textContent ?? "";
-          if (
-            text.includes("Processing") ||
-            text.includes("Completed") ||
-            text.includes("Error") ||
-            text.includes("Grabbing")
-          ) {
-            return true;
-          }
-        }
-        return false;
-      },
-      ATTRIBUTE_NAME,
-      { timeout },
-    );
-  };
-
-  const waitForAgentComplete = async (timeout = 10000) => {
-    await page.waitForFunction(
-      (attrName) => {
-        const host = document.querySelector(`[${attrName}]`);
-        const shadowRoot = host?.shadowRoot;
-        if (!shadowRoot) return false;
-        const root = shadowRoot.querySelector(`[${attrName}]`);
-        if (!root) return false;
-        const sessionElements = Array.from(
-          root.querySelectorAll("[data-react-grab-ignore-events]"),
-        );
-        let hasSession = false;
-        let isStreaming = false;
-        for (let i = 0; i < sessionElements.length; i++) {
-          const text = sessionElements[i].textContent ?? "";
-          if (
-            text.includes("Processing") ||
-            text.includes("Completed") ||
-            text.includes("Error") ||
-            text.includes("Grabbing")
-          ) {
-            hasSession = true;
-            if (text.includes("Processing") || text.includes("Grabbing")) {
-              isStreaming = true;
-            }
-          }
-        }
-        return hasSession && !isStreaming;
-      },
-      ATTRIBUTE_NAME,
-      { timeout },
-    );
-  };
-
-  const clickAgentDismiss = async () => {
-    await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return;
-
-      const dismissButton = root.querySelector<HTMLButtonElement>(
-        "[data-react-grab-dismiss]",
-      );
-      dismissButton?.click();
-    }, ATTRIBUTE_NAME);
-  };
-
-  const clickAgentUndo = async () => {
-    await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return;
-
-      const undoButton = root.querySelector<HTMLButtonElement>(
-        "[data-react-grab-undo]",
-      );
-      undoButton?.click();
-    }, ATTRIBUTE_NAME);
-  };
-
-  const clickAgentRetry = async () => {
-    await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return;
-
-      const retryButton = root.querySelector<HTMLButtonElement>(
-        "[data-react-grab-retry]",
-      );
-      retryButton?.click();
-    }, ATTRIBUTE_NAME);
-  };
-
-  const clickAgentAbort = async () => {
-    await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return;
-
-      const abortButton = root.querySelector<HTMLButtonElement>(
-        "[data-react-grab-abort]",
-      );
-      abortButton?.click();
-    }, ATTRIBUTE_NAME);
-  };
-
-  const confirmAgentAbort = async () => {
-    await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return;
-
-      const yesButton = root.querySelector<HTMLButtonElement>(
-        "[data-react-grab-discard-yes]",
-      );
-      yesButton?.click();
-    }, ATTRIBUTE_NAME);
-  };
-
-  const cancelAgentAbort = async () => {
-    await page.evaluate((attrName) => {
-      const host = document.querySelector(`[${attrName}]`);
-      const shadowRoot = host?.shadowRoot;
-      if (!shadowRoot) return;
-      const root = shadowRoot.querySelector(`[${attrName}]`);
-      if (!root) return;
-
-      const noButton = root.querySelector<HTMLButtonElement>(
-        "[data-react-grab-discard-no]",
-      );
-      noButton?.click();
-    }, ATTRIBUTE_NAME);
+    return didInstallFreshApi;
   };
 
   const dispatchPointerEvent = async (
@@ -1968,22 +1548,20 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     const element = page.locator(selector).first();
     const box = await element.boundingBox();
     if (box) {
-      await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+      const position = await getTextInteractionPosition(element);
+      await page.touchscreen.tap(
+        box.x + (position?.x ?? box.width / 2),
+        box.y + (position?.y ?? box.height / 2),
+      );
     }
   };
 
-  const touchDrag = async (
-    startX: number,
-    startY: number,
-    endX: number,
-    endY: number,
-  ) => {
+  const touchDrag = async (startX: number, startY: number, endX: number, endY: number) => {
     await dispatchPointerEvent("pointerdown", startX, startY);
 
-    const steps = 10;
-    for (let i = 1; i <= steps; i++) {
-      const currentX = startX + ((endX - startX) * i) / steps;
-      const currentY = startY + ((endY - startY) * i) / steps;
+    for (let dragStepIndex = 1; dragStepIndex <= TOUCH_DRAG_STEPS; dragStepIndex++) {
+      const currentX = startX + ((endX - startX) * dragStepIndex) / TOUCH_DRAG_STEPS;
+      const currentY = startY + ((endY - startY) * dragStepIndex) / TOUCH_DRAG_STEPS;
       await dispatchPointerEvent("pointermove", currentX, currentY);
     }
 
@@ -1997,9 +1575,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
           __REACT_GRAB__?: { getState: () => { isTouchMode?: boolean } };
         }
       ).__REACT_GRAB__;
-      return (
-        (api?.getState() as { isTouchMode?: boolean })?.isTouchMode ?? false
-      );
+      return (api?.getState() as { isTouchMode?: boolean })?.isTouchMode ?? false;
     });
   };
 
@@ -2007,8 +1583,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     await page.setViewportSize({ width, height });
     await page.waitForFunction(
       ({ expectedWidth, expectedHeight }) =>
-        window.innerWidth === expectedWidth &&
-        window.innerHeight === expectedHeight,
+        window.innerWidth === expectedWidth && window.innerHeight === expectedHeight,
       { expectedWidth: width, expectedHeight: height },
       { timeout: 2000 },
     );
@@ -2041,13 +1616,6 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     }, selector);
   };
 
-  const showElement = async (selector: string) => {
-    await page.evaluate((sel) => {
-      const element = document.querySelector(sel) as HTMLElement;
-      if (element) element.style.display = "";
-    }, selector);
-  };
-
   const getElementBounds = async (
     selector: string,
   ): Promise<{
@@ -2058,9 +1626,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
   } | null> => {
     const element = page.locator(selector).first();
     const box = await element.boundingBox();
-    return box
-      ? { x: box.x, y: box.y, width: box.width, height: box.height }
-      : null;
+    return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
   };
 
   const isDropdownOpen = async (): Promise<boolean> => {
@@ -2107,10 +1673,7 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         window as {
           __REACT_GRAB__?: {
             unregisterPlugin: (name: string) => void;
-            registerPlugin: (plugin: {
-              name: string;
-              hooks: Record<string, unknown>;
-            }) => void;
+            registerPlugin: (plugin: { name: string; hooks: Record<string, unknown> }) => void;
           };
         }
       ).__REACT_GRAB__;
@@ -2132,7 +1695,6 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
           onPromptModeChange: trackCallback("onPromptModeChange"),
           onSelectionBox: trackCallback("onSelectionBox"),
           onDragBox: trackCallback("onDragBox"),
-          onCrosshair: trackCallback("onCrosshair"),
           onGrabbedBox: trackCallback("onGrabbedBox"),
           onContextMenu: trackCallback("onContextMenu"),
           onOpenFile: trackCallback("onOpenFile"),
@@ -2143,8 +1705,8 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
 
   const getCallbackHistory = async (): Promise<
     Array<{ name: string; args: unknown[]; timestamp: number }>
-  > => {
-    return page.evaluate(() => {
+  > =>
+    page.evaluate(() => {
       return (
         (
           window as {
@@ -2157,7 +1719,6 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
         ).__CALLBACK_HISTORY__ ?? []
       );
     });
-  };
 
   const clearCallbackHistory = async () => {
     await page.evaluate(() => {
@@ -2173,15 +1734,11 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     });
   };
 
-  const waitForCallback = async (
-    name: string,
-    timeout = 5000,
-  ): Promise<unknown[]> => {
+  const waitForCallback = async (name: string, timeout = 5000): Promise<unknown[]> => {
     await page.waitForFunction(
       (callbackName) => {
         const history =
-          (window as { __CALLBACK_HISTORY__?: Array<{ name: string }> })
-            .__CALLBACK_HISTORY__ ?? [];
+          (window as { __CALLBACK_HISTORY__?: Array<{ name: string }> }).__CALLBACK_HISTORY__ ?? [];
         return history.some((c) => c.name === callbackName);
       },
       name,
@@ -2194,20 +1751,23 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
 
   return {
     page,
-    modifierKey: MODIFIER_KEY,
+    modifierKey: activationModifierKey,
+    feedbackModifierKey,
     activate,
     activateViaKeyboard,
+    activateViaKeyboardFrom,
     deactivate,
-    holdToActivate,
     isOverlayVisible,
     getOverlayHost,
-    getShadowRoot,
     hoverElement,
+    hoverUntilTargetSelected,
+    hoverUntilSelected,
     clickElement,
     rightClickElement,
     rightClickAtPosition,
     dragSelect,
     getClipboardContent,
+    captureNextClipboardWrites,
     waitForSelectionBox,
     waitForSelectionSource,
     isContextMenuVisible,
@@ -2219,7 +1779,6 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     pressArrowDown,
     pressArrowUp,
     pressArrowLeft,
-    pressArrowRight,
     pressEnter,
     pressKey,
     pressKeyCombo,
@@ -2231,32 +1790,22 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     typeInInput,
     getInputValue,
     submitInput,
-    clearInput,
     isPendingDismissVisible,
 
     isToolbarVisible,
     isToolbarCollapsed,
     getToolbarInfo,
     clickToolbarToggle,
+    clickToolbarAction,
+    getToolbarActionPressed,
     clickToolbarCollapse,
-    clickToolbarEnabled,
     dragToolbar,
     dragToolbarFromButton,
 
-    isHistoryButtonVisible,
-    hasUnreadHistoryIndicator,
-    clickHistoryButton,
-    isHistoryDropdownVisible,
-    getHistoryDropdownInfo,
-    clickHistoryItem,
-    clickHistoryItemRemove,
-    clickHistoryItemCopy,
-    clickHistoryCopyAll,
-    clickHistoryClear,
-    hoverHistoryItem,
-    hoverHistoryButton,
-    hoverCopyAllButton,
-    getHistoryDropdownPosition,
+    rightClickToolbarToggle,
+    isToolbarMenuVisible,
+    getToolbarMenuItemLabels,
+    clickToolbarMenuItem,
 
     getSelectionLabelInfo,
     getSelectionLabelBounds,
@@ -2264,33 +1813,20 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
     waitForSelectionLabel,
     getLabelStatusText,
 
-    getCrosshairInfo,
-    isCrosshairVisible,
     getGrabbedBoxInfo,
     getLabelInstancesInfo,
     isGrabbedBoxVisible,
     getDragBoxBounds,
     getSelectionBoxBounds,
+    getTargetTestId,
 
     getState,
     toggle,
     dispose,
     copyElementViaApi,
-    setAgent,
+    registerCommentAction,
     updateOptions,
     reinitialize,
-
-    setupMockAgent,
-    getAgentSessions,
-    isAgentSessionVisible,
-    waitForAgentSession,
-    waitForAgentComplete,
-    clickAgentDismiss,
-    clickAgentUndo,
-    clickAgentRetry,
-    clickAgentAbort,
-    confirmAgentAbort,
-    cancelAgentAbort,
 
     touchStart,
     touchMove,
@@ -2304,7 +1840,6 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
 
     removeElement,
     hideElement,
-    showElement,
     getElementBounds,
     isDropdownOpen,
     openDropdown,
@@ -2316,25 +1851,39 @@ const createReactGrabPageObject = (page: Page): ReactGrabPageObject => {
   };
 };
 
-export const test = base.extend<{ reactGrab: ReactGrabPageObject }>({
-  reactGrab: async ({ page }, use) => {
+export const test = base.extend<{ reactGrab: ReactGrabPageObject; coverageCapture: void }>({
+  // Captures V8 JS coverage for every test under COVERAGE. `reactGrab` depends
+  // on it so it starts before the page navigates. The coverage package is
+  // imported lazily (and built) only on coverage runs, so normal and perf runs
+  // never need its dist; off-coverage this is a no-op.
+  coverageCapture: [
+    async ({ page }, use) => {
+      if (!COVERAGE_ENABLED) {
+        await use();
+        return;
+      }
+      const { captureCoverage } = await import("@react-grab/playwright-coverage");
+      await captureCoverage(page, COVERAGE_RAW_DIR, use);
+    },
+    { auto: true },
+  ],
+
+  reactGrab: async ({ page, coverageCapture }, use) => {
+    void coverageCapture;
     const waitForApiReady = async () => {
       await page.waitForFunction(
         () => {
           const api = (window as { __REACT_GRAB__?: unknown }).__REACT_GRAB__;
           return api !== undefined;
         },
+        undefined,
         { timeout: PAGE_SETUP_API_TIMEOUT_MS },
       );
     };
 
     const initializePage = async () => {
       let lastError: unknown;
-      for (
-        let attemptIndex = 0;
-        attemptIndex < PAGE_SETUP_MAX_ATTEMPTS;
-        attemptIndex++
-      ) {
+      for (let attemptIndex = 0; attemptIndex < PAGE_SETUP_MAX_ATTEMPTS; attemptIndex++) {
         if (page.isClosed()) {
           throw new Error("Browser page closed during reactGrab fixture setup");
         }
@@ -2353,9 +1902,8 @@ export const test = base.extend<{ reactGrab: ReactGrabPageObject }>({
           if (attemptIndex === PAGE_SETUP_MAX_ATTEMPTS - 1) {
             throw lastError;
           }
-          // HACK: brief backoff helps when dev server is under heavy parallel load.
           await new Promise((resolve) => {
-            setTimeout(resolve, 250 * (attemptIndex + 1));
+            setTimeout(resolve, PAGE_SETUP_RETRY_BACKOFF_MS * (attemptIndex + 1));
           });
         }
       }
@@ -2363,7 +1911,9 @@ export const test = base.extend<{ reactGrab: ReactGrabPageObject }>({
 
     await initializePage();
 
-    const reactGrab = createReactGrabPageObject(page);
+    const activationModifierKey = await getBrowserModifierKey(page);
+    const feedbackModifierKey = getHostModifierKey();
+    const reactGrab = createReactGrabPageObject(page, activationModifierKey, feedbackModifierKey);
     await use(reactGrab);
   },
 });

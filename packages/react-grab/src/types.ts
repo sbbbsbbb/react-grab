@@ -1,3 +1,23 @@
+import type { JSX } from "solid-js";
+
+export interface Position {
+  x: number;
+  y: number;
+}
+
+export interface ElementAtPointOptions {
+  container?: Element;
+  filter?: (element: Element) => boolean;
+}
+
+export interface ElementBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  borderRadius: string;
+}
+
 export type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object
     ? T[P] extends (...args: unknown[]) => unknown
@@ -58,16 +78,6 @@ export interface Theme {
     enabled?: boolean;
   };
   /**
-   * The crosshair cursor overlay that helps with precise element targeting
-   */
-  crosshair?: {
-    /**
-     * Whether to show the crosshair
-     * @default true
-     */
-    enabled?: boolean;
-  };
-  /**
    * The floating toolbar that allows toggling React Grab activation
    */
   toolbar?: {
@@ -84,7 +94,6 @@ export interface ReactGrabState {
   isDragging: boolean;
   isCopying: boolean;
   isPromptMode: boolean;
-  isCrosshairVisible: boolean;
   isSelectionBoxVisible: boolean;
   isDragBoxVisible: boolean;
   targetElement: Element | null;
@@ -117,11 +126,6 @@ export interface PromptModeContext {
   targetElement: Element | null;
 }
 
-export interface CrosshairContext {
-  x: number;
-  y: number;
-}
-
 export interface ElementLabelContext {
   x: number;
   y: number;
@@ -142,87 +146,17 @@ export interface AgentContext<T = unknown> {
   sessionId?: string;
 }
 
-export interface AgentSession {
-  id: string;
-  context: AgentContext;
-  lastStatus: string;
-  isStreaming: boolean;
-  isFading?: boolean;
-  createdAt: number;
-  lastUpdatedAt: number;
-  position: { x: number; y: number };
-  selectionBounds: OverlayBounds[];
-  tagName?: string;
-  componentName?: string;
-  error?: string;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export interface AgentProvider<T = any> {
-  send: (
-    context: AgentContext<T>,
-    signal: AbortSignal,
-  ) => AsyncIterable<string>;
-  resume?: (
-    sessionId: string,
-    signal: AbortSignal,
-    storage: AgentSessionStorage,
-  ) => AsyncIterable<string>;
-  abort?: (sessionId: string) => Promise<void>;
-  supportsResume?: boolean;
-  supportsFollowUp?: boolean;
-  dismissButtonText?: string;
-  checkConnection?: () => Promise<boolean>;
-  getCompletionMessage?: () => string | undefined;
-  undo?: () => Promise<void>;
-  canUndo?: () => boolean;
-  redo?: () => Promise<void>;
-  canRedo?: () => boolean;
-}
-
-export interface AgentSessionStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
-
-export interface AgentCompleteResult {
-  error?: string;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export interface AgentOptions<T = any> {
-  provider?: AgentProvider<T>;
-  storage?: AgentSessionStorage | null;
-  getOptions?: () => T;
-  onStart?: (session: AgentSession, elements: Element[]) => void;
-  onStatus?: (status: string, session: AgentSession) => void;
-  onComplete?: (
-    session: AgentSession,
-    elements: Element[],
-  ) => AgentCompleteResult | void | Promise<AgentCompleteResult | void>;
-  onError?: (error: Error, session: AgentSession) => void;
-  onResume?: (session: AgentSession) => void;
-  onAbort?: (session: AgentSession, elements: Element[]) => void;
-  onUndo?: (session: AgentSession, elements: Element[]) => void;
-  onDismiss?: (session: AgentSession, elements: Element[]) => void;
-}
-
 export type ActivationMode = "toggle" | "hold";
 
-export interface ActionContextHooks {
-  transformHtmlContent: (html: string, elements: Element[]) => Promise<string>;
-  transformScreenshot: (
-    blob: Blob,
-    elements: Element[],
-    bounds: ScreenshotBounds,
-  ) => Promise<Blob>;
+export type OverlayDismissSource = "keyboard" | "pointer";
+
+export interface OpenFileActionHooks {
   onOpenFile: (filePath: string, lineNumber?: number) => boolean | void;
-  transformOpenFileUrl: (
-    url: string,
-    filePath: string,
-    lineNumber?: number,
-  ) => string;
+  transformOpenFileUrl: (url: string, filePath: string, lineNumber?: number) => string;
+}
+
+export interface ActionContextHooks extends OpenFileActionHooks {
+  transformHtmlContent: (html: string, elements: Element[]) => Promise<string>;
 }
 
 export interface ActionContext {
@@ -232,12 +166,10 @@ export interface ActionContext {
   lineNumber?: number;
   componentName?: string;
   tagName?: string;
-  enterPromptMode?: (agent?: AgentOptions) => void;
+  enterPromptMode?: () => void;
   hooks: ActionContextHooks;
   performWithFeedback: (action: () => Promise<boolean>) => Promise<void>;
   hideContextMenu: () => void;
-  hideOverlay: () => void;
-  showOverlay: () => void;
   cleanup: () => void;
 }
 
@@ -249,97 +181,84 @@ export interface ContextMenuAction {
   id: string;
   label: string;
   shortcut?: string;
+  shortcutModifier?: boolean;
+  showInToolbarMenu?: boolean;
   enabled?: boolean | ((context: ActionContext) => boolean);
   onAction: (context: ContextMenuActionContext) => void | Promise<void>;
-  agent?: AgentOptions;
 }
 
-export interface ActionCycleItem {
-  id: string;
-  label: string;
-  shortcut?: string;
+// A predicate over a DOM element (e.g. "is this element grabbable?").
+export interface ElementPredicate {
+  (element: Element): boolean;
 }
 
-export interface ActionCycleState {
-  items: ActionCycleItem[];
-  activeIndex: number | null;
-  isVisible: boolean;
+// A single rendered row of the hierarchy dropdown (renderer-facing: no element
+// reference, only what is drawn).
+export interface HierarchyItem {
+  tagName: string;
+  componentName?: string;
+  // Indentation level within the hierarchy tree (0 = outermost ancestor).
+  depth: number;
+  // Whether this row is the last among its displayed siblings, used to pick
+  // the terminal-style connector glyph (└─ vs ├─).
+  isLast: boolean;
+}
+
+// Internal hierarchy node that pairs a real DOM element with its position in
+// the rendered ancestor/sibling/child tree. The element reference is kept in
+// core (never sent to the renderer).
+export interface HierarchyEntry {
+  element: Element;
+  depth: number;
+  isLast: boolean;
+}
+
+export interface HierarchyState {
+  items: HierarchyItem[];
+  activeIndex: number;
 }
 
 export interface PerformWithFeedbackOptions {
   fallbackBounds?: OverlayBounds;
   fallbackSelectionBounds?: OverlayBounds[];
-  position?: { x: number; y: number };
-}
-
-export interface ScreenshotBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+  position?: Position;
 }
 
 export interface PluginHooks {
-  onActivate?: () => void;
-  onDeactivate?: () => void;
-  onElementHover?: (element: Element) => void;
-  onElementSelect?: (element: Element) => void;
-  onDragStart?: (startX: number, startY: number) => void;
-  onDragEnd?: (elements: Element[], bounds: DragRect) => void;
+  onActivate?: () => void | Promise<void>;
+  onDeactivate?: () => void | Promise<void>;
+  onElementHover?: (element: Element) => void | Promise<void>;
+  onElementSelect?: (element: Element) => boolean | void | Promise<boolean>;
+  onDragStart?: (startX: number, startY: number) => void | Promise<void>;
+  onDragEnd?: (elements: Element[], bounds: DragRect) => void | Promise<void>;
   onBeforeCopy?: (elements: Element[]) => void | Promise<void>;
-  transformCopyContent?: (
-    content: string,
-    elements: Element[],
-  ) => string | Promise<string>;
-  onAfterCopy?: (elements: Element[], success: boolean) => void;
-  onCopySuccess?: (elements: Element[], content: string) => void;
-  onCopyError?: (error: Error) => void;
-  onStateChange?: (state: ReactGrabState) => void;
-  onPromptModeChange?: (
-    isPromptMode: boolean,
-    context: PromptModeContext,
-  ) => void;
+  transformCopyContent?: (content: string, elements: Element[]) => string | Promise<string>;
+  onAfterCopy?: (elements: Element[], success: boolean) => void | Promise<void>;
+  onCopySuccess?: (elements: Element[], content: string) => void | Promise<void>;
+  onCopyError?: (error: Error) => void | Promise<void>;
+  onStateChange?: (state: ReactGrabState) => void | Promise<void>;
+  onPromptModeChange?: (isPromptMode: boolean, context: PromptModeContext) => void | Promise<void>;
   onSelectionBox?: (
     visible: boolean,
     bounds: OverlayBounds | null,
     element: Element | null,
-  ) => void;
-  onDragBox?: (visible: boolean, bounds: OverlayBounds | null) => void;
-  onGrabbedBox?: (bounds: OverlayBounds, element: Element) => void;
+  ) => void | Promise<void>;
+  onDragBox?: (visible: boolean, bounds: OverlayBounds | null) => void | Promise<void>;
+  onGrabbedBox?: (bounds: OverlayBounds, element: Element) => void | Promise<void>;
   onElementLabel?: (
     visible: boolean,
     variant: ElementLabelVariant,
     context: ElementLabelContext,
-  ) => void;
-  onCrosshair?: (visible: boolean, context: CrosshairContext) => void;
-  onContextMenu?: (
-    element: Element,
-    position: { x: number; y: number },
-  ) => void;
+  ) => void | Promise<void>;
+  onContextMenu?: (element: Element, position: Position) => void | Promise<void>;
   onOpenFile?: (filePath: string, lineNumber?: number) => boolean | void;
-  transformHtmlContent?: (
-    html: string,
-    elements: Element[],
-  ) => string | Promise<string>;
-  transformScreenshot?: (
-    blob: Blob,
-    elements: Element[],
-    bounds: ScreenshotBounds,
-  ) => Blob | Promise<Blob>;
+  transformHtmlContent?: (html: string, elements: Element[]) => string | Promise<string>;
   transformAgentContext?: (
     context: AgentContext,
     elements: Element[],
   ) => AgentContext | Promise<AgentContext>;
   transformActionContext?: (context: ActionContext) => ActionContext;
-  transformOpenFileUrl?: (
-    url: string,
-    filePath: string,
-    lineNumber?: number,
-  ) => string;
-  transformSnippet?: (
-    snippet: string,
-    element: Element,
-  ) => string | Promise<string>;
+  transformOpenFileUrl?: (url: string, filePath: string, lineNumber?: number) => string;
 }
 
 export interface PluginConfig {
@@ -347,7 +266,7 @@ export interface PluginConfig {
   options?: SettableOptions;
   actions?: ContextMenuAction[];
   hooks?: PluginHooks;
-  cleanup?: () => void;
+  cleanup?: () => undefined;
 }
 
 export interface Plugin {
@@ -356,33 +275,78 @@ export interface Plugin {
   options?: SettableOptions;
   actions?: ContextMenuAction[];
   hooks?: PluginHooks;
-  setup?: (api: ReactGrabAPI) => PluginConfig | void;
+  setup?: (api: ReactGrabAPI, hooks: ActionContextHooks) => PluginConfig | void;
 }
 
 export interface Options {
   enabled?: boolean;
+  /**
+   * Confine React Grab to a single container element instead of the whole page.
+   * Hit-testing, the toolbar viewport, and scroll re-anchoring are scoped to it.
+   * Used by the demo build to scope the showcase to its card.
+   */
+  container?: HTMLElement;
   activationMode?: ActivationMode;
   keyHoldDuration?: number;
   allowActivationInsideInput?: boolean;
-  maxContextLines?: number;
   activationKey?: ActivationKey;
   getContent?: (elements: Element[]) => Promise<string> | string;
+  /**
+   * Maximum number of source-location lines included in the copied / prompted
+   * context for a grabbed element. Larger apps often render a target through
+   * several wrapper components, so the compact default can point an agent at a
+   * wrapper instead of the meaningful surface. Raise this to opt into a deeper,
+   * more detailed trace. Low-signal library frames are always surfaced for free
+   * and never count against this budget.
+   * @default 3
+   */
+  maxContextLines?: number;
   /**
    * Whether to freeze React state updates while React Grab is active.
    * This prevents UI changes from interfering with element selection.
    * @default true
    */
   freezeReactUpdates?: boolean;
+  /**
+   * Whether to send the anonymous version check to react-grab.com on init.
+   * Set to false to skip the version-check request.
+   * @default true
+   */
+  telemetry?: boolean;
 }
 
 export interface SettableOptions extends Options {
   enabled?: never;
+  telemetry?: never;
+  container?: never;
 }
 
 export interface SourceInfo {
   filePath: string;
   lineNumber: number | null;
+  columnNumber: number | null;
   componentName: string | null;
+}
+
+export interface SelectedElementPayload {
+  tagName: string;
+  id?: string;
+  className?: string;
+  textContent?: string;
+  componentName?: string;
+  filePath?: string;
+  lineNumber?: number;
+  columnNumber?: number;
+}
+
+export interface ElementSelectedEventDetail {
+  elements: SelectedElementPayload[];
+}
+
+declare global {
+  interface WindowEventMap {
+    "react-grab:element-selected": CustomEvent<ElementSelectedEventDetail>;
+  }
 }
 
 export interface ToolbarState {
@@ -390,28 +354,31 @@ export interface ToolbarState {
   ratio: number;
   collapsed: boolean;
   enabled: boolean;
+  defaultAction?: string;
 }
 
 export interface DropdownAnchor {
   x: number;
   y: number;
   edge: ToolbarState["edge"];
-  toolbarWidth: number;
 }
 
 export interface ReactGrabAPI {
   activate: () => void;
   deactivate: () => void;
   toggle: () => void;
+  comment: () => void;
   isActive: () => boolean;
   isEnabled: () => boolean;
   setEnabled: (enabled: boolean) => void;
   getToolbarState: () => ToolbarState | null;
   setToolbarState: (state: Partial<ToolbarState>) => void;
   onToolbarStateChange: (callback: (state: ToolbarState) => void) => () => void;
+  reset: () => void;
   dispose: () => void;
   copyElement: (elements: Element | Element[]) => Promise<boolean>;
   getSource: (element: Element) => Promise<SourceInfo | null>;
+  getStackContext: (element: Element) => Promise<string>;
   getState: () => ReactGrabState;
   setOptions: (options: SettableOptions) => void;
   registerPlugin: (plugin: Plugin) => void;
@@ -423,18 +390,12 @@ export interface ReactGrabAPI {
 export interface OverlayBounds {
   borderRadius: string;
   height: number;
-  transform: string;
   width: number;
   x: number;
   y: number;
 }
 
-export type SelectionLabelStatus =
-  | "idle"
-  | "copying"
-  | "copied"
-  | "fading"
-  | "error";
+export type SelectionLabelStatus = "idle" | "copying" | "copied" | "fading" | "error";
 
 export interface SelectionLabelInstance {
   id: string;
@@ -457,17 +418,19 @@ export interface SelectionLabelInstance {
   hideArrow?: boolean;
 }
 
-export interface HistoryItem {
-  id: string;
-  content: string;
-  elementName: string;
+export interface FrozenLabelEntry {
   tagName: string;
   componentName?: string;
-  elementsCount?: number;
-  previewBounds?: OverlayBounds[];
-  isComment: boolean;
-  commentText?: string;
-  timestamp: number;
+  bounds: OverlayBounds;
+  mouseX?: number;
+}
+
+export interface FrozenLabelEntryAccessor {
+  read: () => FrozenLabelEntry | null;
+}
+
+export interface SelectionLabelInstanceAccessor {
+  read: () => SelectionLabelInstance | null;
 }
 
 export interface ReactGrabRendererProps {
@@ -476,14 +439,17 @@ export interface ReactGrabRendererProps {
   selectionBoundsMultiple?: OverlayBounds[];
   selectionShouldSnap?: boolean;
   selectionElementsCount?: number;
+  frozenLabelEntryAccessors?: FrozenLabelEntryAccessor[];
+  pendingShiftPreviewEntry?: FrozenLabelEntry;
   selectionFilePath?: string;
-  selectionLineNumber?: number;
   selectionTagName?: string;
   selectionComponentName?: string;
   selectionLabelVisible?: boolean;
   selectionLabelStatus?: SelectionLabelStatus;
-  selectionActionCycleState?: ActionCycleState;
+  hierarchyState?: HierarchyState;
+  hierarchyMenuPosition?: DropdownAnchor | null;
   labelInstances?: SelectionLabelInstance[];
+  labelInstanceAccessors?: SelectionLabelInstanceAccessor[];
   dragVisible?: boolean;
   dragBounds?: OverlayBounds;
   grabbedBoxes?: Array<{
@@ -491,54 +457,31 @@ export interface ReactGrabRendererProps {
     bounds: OverlayBounds;
     createdAt: number;
   }>;
-  labelZIndex?: number;
   mouseX?: number;
-  mouseY?: number;
-  crosshairVisible?: boolean;
   isFrozen?: boolean;
   inputValue?: string;
   isPromptMode?: boolean;
-  replyToPrompt?: string;
-  hasAgent?: boolean;
-  isAgentConnected?: boolean;
-  agentSessions?: Map<string, AgentSession>;
-  supportsUndo?: boolean;
-  supportsFollowUp?: boolean;
-  dismissButtonText?: string;
-  onRequestAbortSession?: (sessionId: string) => void;
-  onAbortSession?: (sessionId: string, confirmed: boolean) => void;
-  onDismissSession?: (sessionId: string) => void;
-  onUndoSession?: (sessionId: string) => void;
-  onFollowUpSubmitSession?: (sessionId: string, prompt: string) => void;
-  onAcknowledgeSessionError?: (sessionId: string) => void;
-  onRetrySession?: (sessionId: string) => void;
-  onShowContextMenuSession?: (sessionId: string) => void;
   onShowContextMenuInstance?: (instanceId: string) => void;
+  onRetryInstance?: (instanceId: string) => void;
+  onAcknowledgeErrorInstance?: (instanceId: string) => void;
   onLabelInstanceHoverChange?: (instanceId: string, isHovered: boolean) => void;
   onInputChange?: (value: string) => void;
   onInputSubmit?: () => void;
-  onInputCancel?: () => void;
-  onToggleExpand?: () => void;
-  isPendingDismiss?: boolean;
+  selectionLabelShakeCount?: number;
   onConfirmDismiss?: () => void;
-  onCancelDismiss?: () => void;
-  pendingAbortSessionId?: string | null;
-  theme?: Required<Theme>;
+  onOpenSelectionFile?: () => void;
+  discardPrompt?: SelectionDiscardPrompt;
   toolbarVisible?: boolean;
   isActive?: boolean;
-  isCommentMode?: boolean;
   onToggleActive?: () => void;
-  onComment?: () => void;
+  activeActionId?: string | null;
   enabled?: boolean;
-  onToggleEnabled?: () => void;
   shakeCount?: number;
   onToolbarStateChange?: (state: ToolbarState) => void;
-  onSubscribeToToolbarStateChanges?: (
-    callback: (state: ToolbarState) => void,
-  ) => () => void;
+  onSubscribeToToolbarStateChanges?: (callback: (state: ToolbarState) => void) => () => void;
   onToolbarSelectHoverChange?: (isHovered: boolean) => void;
   onToolbarRef?: (element: HTMLDivElement) => void;
-  contextMenuPosition?: { x: number; y: number } | null;
+  contextMenuPosition?: Position | null;
   contextMenuBounds?: OverlayBounds | null;
   contextMenuTagName?: string;
   contextMenuComponentName?: string;
@@ -547,23 +490,13 @@ export interface ReactGrabRendererProps {
   actionContext?: ActionContext;
   onContextMenuDismiss?: () => void;
   onContextMenuHide?: () => void;
-  historyItems?: HistoryItem[];
-  historyDisconnectedItemIds?: Set<string>;
-  historyItemCount?: number;
-  hasUnreadHistoryItems?: boolean;
-  historyDropdownPosition?: DropdownAnchor | null;
-  isHistoryPinned?: boolean;
-  onToggleHistory?: () => void;
-  onHistoryButtonHover?: (isHovered: boolean) => void;
-  onHistoryItemSelect?: (item: HistoryItem) => void;
-  onHistoryItemRemove?: (item: HistoryItem) => void;
-  onHistoryItemCopy?: (item: HistoryItem) => void;
-  onHistoryItemHover?: (historyItemId: string | null) => void;
-  onHistoryCopyAll?: () => void;
-  onHistoryCopyAllHover?: (isHovered: boolean) => void;
-  onHistoryClear?: () => void;
-  onHistoryDismiss?: () => void;
-  onHistoryDropdownHover?: (isHovered: boolean) => void;
+  toolbarMenuPosition?: DropdownAnchor | null;
+  toolbarMenuActions?: ContextMenuAction[];
+  defaultActionId?: string;
+  defaultActionLabel?: string;
+  onSetDefaultAction?: (actionId: string) => void;
+  onToggleToolbarMenu?: () => void;
+  onToolbarMenuDismiss?: () => void;
 }
 
 export interface GrabbedBox {
@@ -593,7 +526,6 @@ export interface ArrowProps {
   position: ArrowPosition;
   leftPercent: number;
   leftOffsetPx: number;
-  color?: string;
   labelWidth?: number;
 }
 
@@ -604,16 +536,28 @@ export interface TagBadgeProps {
   onClick: (event: MouseEvent) => void;
   onHoverChange?: (hovered: boolean) => void;
   shrink?: boolean;
-  forceShowIcon?: boolean;
 }
 
 export interface BottomSectionProps {
-  children: import("solid-js").JSX.Element;
+  children: JSX.Element;
 }
 
 export interface DiscardPromptProps {
+  label?: string;
+  showCancel?: boolean;
+  cancelOnEscape?: boolean;
   onConfirm?: () => void;
   onCancel?: () => void;
+  onCopy?: () => void;
+}
+
+export interface SelectionDiscardPrompt {
+  isKeyboardSelection?: boolean;
+  label?: string;
+  cancelOnEscape?: boolean;
+  onConfirm?: () => void;
+  onCancel?: () => void;
+  onCopy?: () => void;
 }
 
 export interface ErrorViewProps {
@@ -624,14 +568,7 @@ export interface ErrorViewProps {
 
 export interface CompletionViewProps {
   statusText: string;
-  supportsUndo?: boolean;
-  supportsFollowUp?: boolean;
-  dismissButtonText?: string;
-  previousPrompt?: string;
   onDismiss?: () => void;
-  onUndo?: () => void;
-  onFollowUpSubmit?: (prompt: string) => void;
-  onCopyStateChange?: () => void;
   onFadingChange?: (isFading: boolean) => void;
   onShowContextMenu?: () => void;
 }
@@ -645,38 +582,43 @@ export interface SelectionLabelProps {
   visible?: boolean;
   isPromptMode?: boolean;
   inputValue?: string;
-  replyToPrompt?: string;
-  previousPrompt?: string;
-  hasAgent?: boolean;
-  isAgentConnected?: boolean;
   status?: SelectionLabelStatus;
   statusText?: string;
   filePath?: string;
-  lineNumber?: number;
-  supportsUndo?: boolean;
-  supportsFollowUp?: boolean;
-  dismissButtonText?: string;
-  actionCycleState?: ActionCycleState;
   onInputChange?: (value: string) => void;
   onSubmit?: () => void;
-  onCancel?: () => void;
-  onToggleExpand?: () => void;
-  onAbort?: () => void;
   onOpen?: () => void;
   onDismiss?: () => void;
-  onUndo?: () => void;
-  onFollowUpSubmit?: (prompt: string) => void;
-  isPendingDismiss?: boolean;
+  selectionLabelShakeCount?: number;
   onConfirmDismiss?: () => void;
-  onCancelDismiss?: () => void;
-  isPendingAbort?: boolean;
-  onConfirmAbort?: () => void;
-  onCancelAbort?: () => void;
+  discardPrompt?: SelectionDiscardPrompt;
   error?: string;
   onAcknowledgeError?: () => void;
   onRetry?: () => void;
-  isContextMenuOpen?: boolean;
   onShowContextMenu?: () => void;
   onHoverChange?: (isHovered: boolean) => void;
   hideArrow?: boolean;
+}
+
+export interface SourceLocation extends SourceInfo {
+  columnNumber: number | null;
+}
+
+export interface ReactGrabStackFrame {
+  functionName?: string;
+  fileName?: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  isServer?: boolean;
+  isSymbolicated?: boolean;
+}
+
+export interface ReactGrabEntry {
+  tagName?: string;
+  componentName?: string;
+  content: string;
+  commentText?: string;
+  source?: SourceLocation | null;
+  stackContext?: string;
+  frames?: ReactGrabStackFrame[];
 }

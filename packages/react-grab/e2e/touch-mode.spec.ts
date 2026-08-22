@@ -2,16 +2,12 @@ import { test, expect } from "./fixtures.js";
 
 test.describe("Touch Mode", () => {
   test.describe("Touch Events", () => {
-    test("touch tap should work for element selection", async ({
-      reactGrab,
-    }) => {
+    test("touch tap should work for element selection", async ({ reactGrab }) => {
       await reactGrab.activate();
 
       await reactGrab.touchTap("li:first-child");
-      await reactGrab.page.waitForTimeout(500);
 
-      const clipboard = await reactGrab.getClipboardContent();
-      expect(clipboard).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
     });
 
     test("touch should set touch mode flag", async ({ reactGrab }) => {
@@ -21,10 +17,7 @@ test.describe("Touch Mode", () => {
       const box = await listItem.boundingBox();
       if (!box) throw new Error("Could not get bounding box");
 
-      await reactGrab.page.touchscreen.tap(
-        box.x + box.width / 2,
-        box.y + box.height / 2,
-      );
+      await reactGrab.page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
       await reactGrab.page.waitForTimeout(100);
 
       const state = await reactGrab.getState();
@@ -48,47 +41,19 @@ test.describe("Touch Mode", () => {
         endBox.x + endBox.width + 10,
         endBox.y + endBox.height + 10,
       );
-      await reactGrab.page.waitForTimeout(500);
-
-      const clipboard = await reactGrab.getClipboardContent();
-      expect(clipboard).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
     });
   });
 
   test.describe("Touch Mode Behavior", () => {
-    test("crosshair should be hidden in touch mode", async ({ reactGrab }) => {
-      await reactGrab.updateOptions({
-        theme: { crosshair: { enabled: true } },
-      });
+    test("touch events should update pointer position", async ({ reactGrab }) => {
       await reactGrab.activate();
 
       const listItem = reactGrab.page.locator("li").first();
       const box = await listItem.boundingBox();
       if (!box) throw new Error("Could not get bounding box");
 
-      await reactGrab.page.touchscreen.tap(
-        box.x + box.width / 2,
-        box.y + box.height / 2,
-      );
-      await reactGrab.page.waitForTimeout(100);
-
-      const isCrosshairVisible = await reactGrab.isCrosshairVisible();
-      expect(isCrosshairVisible).toBe(false);
-    });
-
-    test("touch events should update pointer position", async ({
-      reactGrab,
-    }) => {
-      await reactGrab.activate();
-
-      const listItem = reactGrab.page.locator("li").first();
-      const box = await listItem.boundingBox();
-      if (!box) throw new Error("Could not get bounding box");
-
-      await reactGrab.page.touchscreen.tap(
-        box.x + box.width / 2,
-        box.y + box.height / 2,
-      );
+      await reactGrab.page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
       await reactGrab.page.waitForTimeout(100);
 
       const state = await reactGrab.getState();
@@ -100,17 +65,8 @@ test.describe("Touch Mode", () => {
     test("touch should select element", async ({ reactGrab }) => {
       await reactGrab.activate();
 
-      await reactGrab.hoverElement("[data-testid='todo-list'] h1");
-      await reactGrab.waitForSelectionBox();
-
-      const element = reactGrab.page.locator("[data-testid='todo-list'] h1");
-      const box = await element.boundingBox();
-      if (!box) throw new Error("Could not get bounding box");
-
-      await reactGrab.page.touchscreen.tap(
-        box.x + box.width / 2,
-        box.y + box.height / 2,
-      );
+      await reactGrab.hoverUntilSelected("[data-testid='todo-list'] h1");
+      await reactGrab.touchTap("[data-testid='todo-list'] h1");
 
       await expect
         .poll(() => reactGrab.getClipboardContent(), { timeout: 5000 })
@@ -121,24 +77,45 @@ test.describe("Touch Mode", () => {
       await reactGrab.activate();
 
       await reactGrab.touchTap("li:nth-child(2)");
-      await reactGrab.page.waitForTimeout(500);
 
-      const clipboard1 = await reactGrab.getClipboardContent();
-      expect(clipboard1).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
+
+      await expect.poll(() => reactGrab.isOverlayVisible(), { timeout: 5000 }).toBe(false);
 
       await reactGrab.activate();
       await reactGrab.touchTap("li:nth-child(4)");
-      await reactGrab.page.waitForTimeout(500);
 
-      const clipboard2 = await reactGrab.getClipboardContent();
-      expect(clipboard2).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
+    });
+
+    test("re-activating after touch copy should not show stale selection", async ({
+      reactGrab,
+    }) => {
+      await reactGrab.activate();
+
+      const listItem = reactGrab.page.locator("li").nth(1);
+      const itemBox = await listItem.boundingBox();
+      if (!itemBox) throw new Error("Could not get bounding box");
+      const tapX = itemBox.x + itemBox.width / 2;
+      const tapY = itemBox.y + itemBox.height / 2;
+
+      await reactGrab.touchStart(tapX, tapY);
+      await reactGrab.touchMove(tapX, tapY);
+      await reactGrab.touchEnd(tapX, tapY);
+
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
+      await expect.poll(() => reactGrab.isOverlayVisible(), { timeout: 5000 }).toBe(false);
+
+      await reactGrab.activate();
+
+      await reactGrab.page.waitForTimeout(100);
+
+      expect(await reactGrab.isSelectionBoxVisible()).toBe(false);
     });
   });
 
   test.describe("Touch Drag Selection", () => {
-    test("touch drag should select multiple elements", async ({
-      reactGrab,
-    }) => {
+    test("touch drag should select multiple elements", async ({ reactGrab }) => {
       await reactGrab.activate();
 
       const firstItem = reactGrab.page.locator("li").first();
@@ -155,10 +132,8 @@ test.describe("Touch Mode", () => {
         endBox.x + endBox.width + 5,
         endBox.y + endBox.height + 5,
       );
-      await reactGrab.page.waitForTimeout(500);
 
-      const clipboard = await reactGrab.getClipboardContent();
-      expect(clipboard).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
     });
 
     test("short touch drag should be treated as tap", async ({ reactGrab }) => {
@@ -174,10 +149,8 @@ test.describe("Touch Mode", () => {
         box.x + box.width / 2 + 2,
         box.y + box.height / 2 + 2,
       );
-      await reactGrab.page.waitForTimeout(500);
 
-      const clipboard = await reactGrab.getClipboardContent();
-      expect(clipboard).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
     });
   });
 
@@ -185,57 +158,29 @@ test.describe("Touch Mode", () => {
     test("should handle switch from mouse to touch", async ({ reactGrab }) => {
       await reactGrab.activate();
 
-      await reactGrab.hoverElement("li:first-child");
-      await reactGrab.waitForSelectionBox();
+      await reactGrab.hoverUntilSelected("li:first-child");
 
       await reactGrab.touchTap("li:nth-child(2)");
-      await reactGrab.page.waitForTimeout(500);
 
-      const clipboard = await reactGrab.getClipboardContent();
-      expect(clipboard).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
     });
 
     test("should handle switch from touch to mouse", async ({ reactGrab }) => {
       await reactGrab.activate();
 
       await reactGrab.touchTap("li:first-child");
-      await reactGrab.page.waitForTimeout(200);
+
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
+
+      await expect.poll(() => reactGrab.isOverlayVisible(), { timeout: 5000 }).toBe(false);
 
       await reactGrab.activate();
-      await reactGrab.hoverElement("li:nth-child(3)");
-      await reactGrab.waitForSelectionBox();
+      await reactGrab.page.mouse.move(0, 0);
+      await expect.poll(() => reactGrab.isTouchMode()).toBe(false);
+      await reactGrab.hoverUntilSelected("li:nth-child(3)");
       await reactGrab.clickElement("li:nth-child(3)");
-      await reactGrab.page.waitForTimeout(500);
 
-      const clipboard = await reactGrab.getClipboardContent();
-      expect(clipboard).toBeTruthy();
-    });
-  });
-
-  test.describe("Touch Input Mode", () => {
-    test("double tap should enter input mode with agent", async ({
-      reactGrab,
-    }) => {
-      await reactGrab.setupMockAgent();
-      await reactGrab.activate();
-
-      const listItem = reactGrab.page.locator("li").first();
-      const box = await listItem.boundingBox();
-      if (!box) throw new Error("Could not get bounding box");
-
-      await reactGrab.page.touchscreen.tap(
-        box.x + box.width / 2,
-        box.y + box.height / 2,
-      );
-      await reactGrab.page.waitForTimeout(100);
-      await reactGrab.page.touchscreen.tap(
-        box.x + box.width / 2,
-        box.y + box.height / 2,
-      );
-      await reactGrab.page.waitForTimeout(200);
-
-      const state = await reactGrab.getState();
-      expect(state).toBeDefined();
+      await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
     });
   });
 
@@ -247,14 +192,9 @@ test.describe("Touch Mode", () => {
       const listItem = reactGrab.page.locator("li").first();
       const box = await listItem.boundingBox();
       if (box) {
-        await reactGrab.page.touchscreen.tap(
-          box.x + box.width / 2,
-          box.y + box.height / 2,
-        );
-        await reactGrab.page.waitForTimeout(500);
+        await reactGrab.page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
 
-        const clipboard = await reactGrab.getClipboardContent();
-        expect(clipboard).toBeTruthy();
+        await expect.poll(() => reactGrab.getClipboardContent(), { timeout: 5000 }).toBeTruthy();
       }
     });
   });

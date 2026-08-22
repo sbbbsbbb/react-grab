@@ -11,9 +11,7 @@ test.describe("Activation Flows", () => {
     expect(isVisibleAfter).toBe(true);
   });
 
-  test("should not activate when pressing C without Cmd/Ctrl modifier", async ({
-    reactGrab,
-  }) => {
+  test("should not activate when pressing C without Cmd/Ctrl modifier", async ({ reactGrab }) => {
     await reactGrab.page.keyboard.down("c");
     await reactGrab.page.keyboard.up("c");
 
@@ -21,9 +19,7 @@ test.describe("Activation Flows", () => {
     expect(isVisible).toBe(false);
   });
 
-  test("should deactivate overlay when pressing Escape", async ({
-    reactGrab,
-  }) => {
+  test("should deactivate overlay when pressing Escape", async ({ reactGrab }) => {
     await reactGrab.activate();
     expect(await reactGrab.isOverlayVisible()).toBe(true);
 
@@ -32,9 +28,7 @@ test.describe("Activation Flows", () => {
     expect(await reactGrab.isOverlayVisible()).toBe(false);
   });
 
-  test("should toggle activation state with repeated activation", async ({
-    reactGrab,
-  }) => {
+  test("should toggle activation state with repeated activation", async ({ reactGrab }) => {
     await reactGrab.activate();
     expect(await reactGrab.isOverlayVisible()).toBe(true);
 
@@ -45,9 +39,7 @@ test.describe("Activation Flows", () => {
     expect(await reactGrab.isOverlayVisible()).toBe(true);
   });
 
-  test("should maintain activation during mouse movement", async ({
-    reactGrab,
-  }) => {
+  test("should maintain activation during mouse movement", async ({ reactGrab }) => {
     await reactGrab.activate();
     expect(await reactGrab.isOverlayVisible()).toBe(true);
 
@@ -58,9 +50,7 @@ test.describe("Activation Flows", () => {
     expect(await reactGrab.isOverlayVisible()).toBe(true);
   });
 
-  test("should create overlay host element with correct attribute", async ({
-    reactGrab,
-  }) => {
+  test("should create overlay host element with correct attribute", async ({ reactGrab }) => {
     await reactGrab.activate();
 
     const hostExists = await reactGrab.page.evaluate(() => {
@@ -83,9 +73,7 @@ test.describe("Activation Flows", () => {
 });
 
 test.describe("Activation Mode Configuration", () => {
-  test("toggle mode should activate on first keyboard activation", async ({
-    reactGrab,
-  }) => {
+  test("toggle mode should activate on first keyboard activation", async ({ reactGrab }) => {
     await reactGrab.activateViaKeyboard();
     expect(await reactGrab.isOverlayVisible()).toBe(true);
   });
@@ -108,39 +96,17 @@ test.describe("Activation Mode Configuration", () => {
     expect(await reactGrab.isOverlayVisible()).toBe(false);
   });
 
-  test("should activate when focused on input element", async ({
-    reactGrab,
-  }) => {
-    await reactGrab.page.click("[data-testid='test-input']");
-
-    await reactGrab.page.keyboard.down(reactGrab.modifierKey);
-    await reactGrab.page.keyboard.down("c");
-    await reactGrab.page.waitForTimeout(500);
-    await reactGrab.page.keyboard.up("c");
-    await reactGrab.page.keyboard.up(reactGrab.modifierKey);
-
-    await expect
-      .poll(() => reactGrab.isOverlayVisible(), { timeout: 1000 })
-      .toBe(true);
+  test("should activate when focused on input element", async ({ reactGrab }) => {
+    await reactGrab.activateViaKeyboardFrom("[data-testid='test-input']");
+    expect(await reactGrab.isOverlayVisible()).toBe(true);
   });
 
   test("should activate when focused on textarea", async ({ reactGrab }) => {
-    await reactGrab.page.click("[data-testid='test-textarea']");
-
-    await reactGrab.page.keyboard.down(reactGrab.modifierKey);
-    await reactGrab.page.keyboard.down("c");
-    await reactGrab.page.waitForTimeout(500);
-    await reactGrab.page.keyboard.up("c");
-    await reactGrab.page.keyboard.up(reactGrab.modifierKey);
-
-    await expect
-      .poll(() => reactGrab.isOverlayVisible(), { timeout: 1000 })
-      .toBe(true);
+    await reactGrab.activateViaKeyboardFrom("[data-testid='test-textarea']");
+    expect(await reactGrab.isOverlayVisible()).toBe(true);
   });
 
-  test("activation should work after clicking outside input", async ({
-    reactGrab,
-  }) => {
+  test("activation should work after clicking outside input", async ({ reactGrab }) => {
     await reactGrab.page.click("[data-testid='test-input']");
     await reactGrab.page.click("body", { position: { x: 10, y: 10 } });
 
@@ -148,9 +114,7 @@ test.describe("Activation Mode Configuration", () => {
     expect(await reactGrab.isOverlayVisible()).toBe(true);
   });
 
-  test("API activation should work even when input is focused", async ({
-    reactGrab,
-  }) => {
+  test("API activation should work even when input is focused", async ({ reactGrab }) => {
     await reactGrab.page.click("[data-testid='test-input']");
 
     await reactGrab.activate();
@@ -166,9 +130,7 @@ test.describe("Activation Mode Configuration", () => {
     expect(await reactGrab.isOverlayVisible()).toBe(true);
   });
 
-  test("should remain activated after viewport resize", async ({
-    reactGrab,
-  }) => {
+  test("should remain activated after viewport resize", async ({ reactGrab }) => {
     await reactGrab.activate();
     expect(await reactGrab.isOverlayVisible()).toBe(true);
 
@@ -192,14 +154,32 @@ test.describe("Activation Mode Configuration", () => {
     expect(await reactGrab.isOverlayVisible()).toBe(true);
   });
 
-  test("should handle multiple rapid API toggle calls", async ({
-    reactGrab,
-  }) => {
+  test("should handle multiple rapid API toggle calls", async ({ reactGrab }) => {
     for (let i = 0; i < 5; i++) {
       await reactGrab.toggle();
     }
 
     const state = await reactGrab.getState();
     expect(typeof state.isActive).toBe("boolean");
+  });
+
+  test("restoring focus on deactivate does not scroll the page", async ({ reactGrab, page }) => {
+    // Focus a near-top element, then scroll far away from it so restoring focus
+    // to it on deactivate would jump the page back up without preventScroll.
+    await page.locator("[data-testid='grab-smoke-target']").focus();
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    const scrollBeforeGrab = await page.evaluate(() => window.scrollY);
+    expect(scrollBeforeGrab).toBeGreaterThan(0);
+
+    await reactGrab.activate();
+    // The copy flow moves focus through the clipboard textarea, so the
+    // previously-focused element no longer holds focus and deactivate's restore
+    // actually runs (a bare activate→deactivate leaves focus untouched).
+    await reactGrab.copyElementViaApi("[data-testid='footer']");
+    await reactGrab.deactivate();
+
+    // Focus restoration must not jump back toward the previously focused element.
+    const scrollAfterGrab = await page.evaluate(() => window.scrollY);
+    expect(scrollAfterGrab).toBeGreaterThanOrEqual(scrollBeforeGrab);
   });
 });

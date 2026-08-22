@@ -1,76 +1,43 @@
 # <img src="https://github.com/aidenybai/react-grab/blob/main/.github/public/logo.png?raw=true" width="60" align="center" /> React Grab
 
-[![size](https://img.shields.io/bundlephobia/minzip/react-grab?label=gzip&style=flat&colorA=000000&colorB=000000)](https://bundlephobia.com/package/react-grab)
 [![version](https://img.shields.io/npm/v/react-grab?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/react-grab)
 [![downloads](https://img.shields.io/npm/dt/react-grab.svg?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/react-grab)
 
-Select context for coding agents directly from your website
+Copy any UI element for your agent.
 
-How? Point at any element and press **⌘C** (Mac) or **Ctrl+C** (Windows/Linux) to copy the file name, React component, and HTML source code.
+React Grab points agents to the actual source behind each selection. Agents are [**2× faster**](https://react-grab.com/benchmarks) and more accurate when using React Grab.
 
-It makes tools like Cursor, Claude Code, Copilot run up to [**3× faster**](https://react-grab.com/blog/intro) and more accurate.
+[**Website →**](https://react-grab.com)
 
-### [Try out a demo! →](https://react-grab.com)
+## Quick Start
 
-![React Grab Demo](https://github.com/aidenybai/react-grab/blob/main/packages/website/public/demo.gif?raw=true)
-
-## Install
-
-Run this command at your project root (where `next.config.ts` or `vite.config.ts` is located):
+Run this at your project root:
 
 ```bash
-npx -y grab@latest init
+npx grab@latest init
 ```
 
-Use the `-y` flag to skip interactive prompts:
+## How It Works
 
-```bash
-npx -y grab@latest init -y
-```
+React Grab turns a browser selection into source context your agent can use:
 
-## Connect to Your Agent
+1. Hover any UI element in your app.
+2. Press **⌘C** or **Ctrl+C**.
+3. Paste the copied context into your agent.
 
-Connect React Grab directly to your coding agent (Cursor, Claude Code, Codex, Gemini, Amp, and more):
+The copied context includes the selected element and its component stack with source locations:
 
-```bash
-npx -y grab@latest add [agent]
-```
-
-Or connect via MCP:
-
-```bash
-npx -y grab@latest add mcp
-```
-
-Disconnect an agent:
-
-```bash
-npx -y grab@latest remove [agent]
-```
-
-## Usage
-
-Once installed, hover over any UI element in your browser and press:
-
-- **⌘C** (Cmd+C) on Mac
-- **Ctrl+C** on Windows/Linux
-
-This copies the element's context (file name, React component, and HTML source code) to your clipboard ready to paste into your coding agent. For example:
-
-```js
-<a class="ml-auto inline-block text-sm" href="#">
-  Forgot your password?
-</a>
-in LoginForm at components/login-form.tsx:46:19
+```txt
+[<a class="ml-auto inline-block text-sm" href="#">Forgot your password?</a> in LoginForm (at components/login-form.tsx:46:19)]
 ```
 
 ## Manual Installation
 
-If you're using a React framework or build tool, view instructions below:
+If you cannot use the CLI, install React Grab manually for your framework:
 
 #### Next.js (App router)
 
-Add this inside of your `app/layout.tsx`:
+Add this inside your `app/layout.tsx`:
 
 ```jsx
 import Script from "next/script";
@@ -123,23 +90,12 @@ export default function Document() {
 
 #### Vite
 
-Add this to your `index.html`:
+Add this at the top of your main entry file (e.g., `src/main.tsx`):
 
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <script type="module">
-      if (import.meta.env.DEV) {
-        import("react-grab");
-      }
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+```tsx
+if (import.meta.env.DEV) {
+  import("react-grab");
+}
 ```
 
 #### Webpack
@@ -158,28 +114,29 @@ if (process.env.NODE_ENV === "development") {
 }
 ```
 
-## Extending React Grab
+## Build your own React Grab
 
-React Grab exposes the `__REACT_GRAB__` API for extending functionality with plugins, hooks, actions, themes, and custom agents.
+Build a custom interface with the selection engine from `react-grab/primitives`. Use its APIs for hit testing, source context, page freezing, clipboard access, and editor navigation.
 
-See [`packages/react-grab/src/types.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/types.ts) and [`packages/react-grab/src/core/plugin-registry.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/core/plugin-registry.ts) for reference.
+### Customize hit testing
 
-Or copy this into an agent to generate a plugin:
+Scope hit testing to a container or replace the default element filter with your own rules.
 
-```md
-Clone https://github.com/aidenybai/react-grab into /tmp
+```typescript
+import { getElementAtPoint, isElementGrabbable } from "react-grab/primitives";
 
-Check these files for reference:
-
-- packages/react-grab/src/types.ts (Plugin and PluginHooks interfaces)
-- packages/react-grab/src/core/plugin-registry.ts (implementation)
-
-Plugins are registered via `__REACT_GRAB__.registerPlugin({ name, hooks, actions, theme })`.
-
-Add the code in client-side code (e.g., "use client" in Next.js) inside a useEffect after React Grab loads.
-
-Generate an example plugin that logs when an element is selected.
+export const getPickerTarget = (
+  event: PointerEvent,
+  appElement: Element,
+  toolbarElement: Element,
+): Element | null =>
+  getElementAtPoint(event.clientX, event.clientY, {
+    container: appElement,
+    filter: (candidate) => isElementGrabbable(candidate) && !toolbarElement.contains(candidate),
+  });
 ```
+
+Add `data-react-grab-ignore` to your picker interface so hit testing skips its subtree.
 
 ## Resources & Contributing Back
 
@@ -193,7 +150,7 @@ Find a bug? Head over to our [issue tracker](https://github.com/aidenybai/react-
 
 We expect all contributors to abide by the terms of our [Code of Conduct](https://github.com/aidenybai/react-grab/blob/main/.github/CODE_OF_CONDUCT.md).
 
-[**→ Start contributing on GitHub**](https://github.com/aidenybai/react-grab/blob/main/CONTRIBUTING.md)
+[**Start contributing on GitHub**](https://github.com/aidenybai/react-grab/blob/main/CONTRIBUTING.md)
 
 ### License
 

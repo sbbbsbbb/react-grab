@@ -1,12 +1,23 @@
 import { clearElementPositionCache } from "./get-element-at-position.js";
+import { getAccessibleIframeDocument } from "./get-accessible-iframe-document.js";
+import { getComposedParentElement } from "./get-composed-parent-element.js";
+import { getDeepElementAtPoint } from "./get-deep-element-at-point.js";
+import { getDeepHoveredElements } from "./get-deep-hovered-elements.js";
+import { isHtmlElement } from "./is-html-element.js";
+import { isIframeElement } from "./is-iframe-element.js";
+import { isReactGrabElement } from "./is-react-grab-element.js";
+import { IS_DEMO } from "./runtime-mode.js";
 import {
-  enablePointerEventsOverride,
-  disablePointerEventsOverride,
-} from "./pointer-events-override.js";
-import { createStyleElement } from "./create-style-element.js";
+  installPointerEventsFreeze,
+  isPointerEventsFreezeInstalled,
+  registerPointerEventsFreezeDocument,
+  uninstallPointerEventsFreeze,
+} from "./pointer-events-freeze.js";
+import { throwCollectedErrors } from "./throw-collected-errors.js";
 
-const POINTER_EVENTS_STYLES = "* { pointer-events: none !important; }";
-
+// These capture-phase blockers prevent hover and focus side effects while the
+// pointer-events freeze is briefly suspended for hit-testing. Even though the
+// stylesheet is disabled, these listeners swallow events the browser would fire.
 const MOUSE_EVENTS_TO_BLOCK = [
   "mouseenter",
   "mouseleave",
@@ -20,6 +31,11 @@ const MOUSE_EVENTS_TO_BLOCK = [
 
 const FOCUS_EVENTS_TO_BLOCK = ["focus", "blur", "focusin", "focusout"] as const;
 
+// Before disabling pointer-events we snapshot current :hover and :focus computed
+// values (background-color, box-shadow, opacity, etc.) onto inline styles so
+// elements keep their visual state (e.g. a hovered button stays highlighted).
+// display is pinned so hover-revealed dropdowns/tooltips under the cursor
+// (display:none until :hover) stay open once the freeze drops :hover.
 const HOVER_STYLE_PROPERTIES = [
   "background-color",
   "color",
@@ -31,6 +47,7 @@ const HOVER_STYLE_PROPERTIES = [
   "filter",
   "scale",
   "visibility",
+  "display",
 ] as const;
 
 const FOCUS_STYLE_PROPERTIES = [
@@ -49,158 +66,227 @@ const FOCUS_STYLE_PROPERTIES = [
   "ring-width",
 ] as const;
 
-const ANIMATION_CONTROLLED_PROPERTIES = [
-  "opacity",
-  "transform",
-  "scale",
-  "translate",
-  "rotate",
-] as const;
-
 interface FrozenPseudoState {
   element: HTMLElement;
-  originalCssText: string;
-  frozenStyles: string;
+  frozenPropertyValues: Map<string, string>;
+  originalPropertyValues: Map<string, InlineStyleProperty>;
 }
 
-const frozenHoverElements = new Map<HTMLElement, string>();
-const frozenFocusElements = new Map<HTMLElement, string>();
-let pointerEventsStyle: HTMLStyleElement | null = null;
+interface InlineStyleProperty {
+  value: string;
+  priority: string;
+}
+
+const frozenHoverElements = new Map<HTMLElement, Map<string, InlineStyleProperty>>();
+const frozenFocusElements = new Map<HTMLElement, Map<string, InlineStyleProperty>>();
+const registeredDocuments = new Set<Document>();
+let isFreezeApplied = false;
 
 const stopEvent = (event: Event): void => {
-  event.stopPropagation();
   event.stopImmediatePropagation();
 };
 
 const preventFocusChange = (event: Event): void => {
   event.preventDefault();
-  event.stopPropagation();
   event.stopImmediatePropagation();
 };
 
-const hasAnimationControlledProperty = (cssText: string): boolean => {
-  const lowerCssText = cssText.toLowerCase();
-  return ANIMATION_CONTROLLED_PROPERTIES.some((prop) =>
-    lowerCssText.includes(prop),
-  );
-};
-
-const collectHoverStates = (): FrozenPseudoState[] => {
-  const elementsToFreeze: FrozenPseudoState[] = [];
-
-  for (const element of document.querySelectorAll(":hover")) {
-    if (!(element instanceof HTMLElement)) continue;
-
-    const originalCssText = element.style.cssText;
-    const computed = getComputedStyle(element);
-    let frozenStyles = originalCssText;
-
-    for (const prop of HOVER_STYLE_PROPERTIES) {
-      const computedValue = computed.getPropertyValue(prop);
-      if (computedValue) {
-        frozenStyles += `${prop}: ${computedValue} !important; `;
-      }
-    }
-
-    elementsToFreeze.push({ element, originalCssText, frozenStyles });
+const addEventBlockers = (targetDocument: Document): void => {
+  for (const eventType of MOUSE_EVENTS_TO_BLOCK) {
+    targetDocument.addEventListener(eventType, stopEvent, true);
   }
 
-  return elementsToFreeze;
+  for (const eventType of FOCUS_EVENTS_TO_BLOCK) {
+    targetDocument.addEventListener(eventType, preventFocusChange, true);
+  }
 };
 
-const collectFocusStates = (): FrozenPseudoState[] => {
-  const elementsToFreeze: FrozenPseudoState[] = [];
-
-  for (const element of document.querySelectorAll(":focus, :focus-visible")) {
-    if (!(element instanceof HTMLElement)) continue;
-    if (frozenFocusElements.has(element)) continue;
-
-    const originalCssText = element.style.cssText;
-    const computed = getComputedStyle(element);
-    let frozenStyles = originalCssText;
-
-    for (const prop of FOCUS_STYLE_PROPERTIES) {
-      const computedValue = computed.getPropertyValue(prop);
-      if (computedValue) {
-        frozenStyles += `${prop}: ${computedValue} !important; `;
-      }
-    }
-
-    elementsToFreeze.push({ element, originalCssText, frozenStyles });
+const removeEventBlockers = (targetDocument: Document): void => {
+  for (const eventType of MOUSE_EVENTS_TO_BLOCK) {
+    targetDocument.removeEventListener(eventType, stopEvent, true);
   }
 
-  return elementsToFreeze;
+  for (const eventType of FOCUS_EVENTS_TO_BLOCK) {
+    targetDocument.removeEventListener(eventType, preventFocusChange, true);
+  }
+};
+
+export const registerPseudoStateDocument = (targetDocument: Document): (() => void) => {
+  registeredDocuments.add(targetDocument);
+  const unregisterPointerEventsFreezeDocument = registerPointerEventsFreezeDocument(targetDocument);
+  if (isFreezeApplied) addEventBlockers(targetDocument);
+
+  return () => {
+    if (isFreezeApplied) removeEventBlockers(targetDocument);
+    registeredDocuments.delete(targetDocument);
+    unregisterPointerEventsFreezeDocument();
+  };
+};
+
+const freezeElement = (
+  element: HTMLElement,
+  properties: readonly string[],
+  alreadyFrozen?: ReadonlyMap<HTMLElement, unknown>,
+): FrozenPseudoState | null => {
+  if (alreadyFrozen?.has(element)) return null;
+
+  const computed = getComputedStyle(element);
+  const frozenPropertyValues = new Map<string, string>();
+  const originalPropertyValues = new Map<string, InlineStyleProperty>();
+
+  for (const property of properties) {
+    const computedValue = computed.getPropertyValue(property);
+    if (computedValue) {
+      frozenPropertyValues.set(property, computedValue);
+      originalPropertyValues.set(property, {
+        value: element.style.getPropertyValue(property),
+        priority: element.style.getPropertyPriority(property),
+      });
+    }
+  }
+
+  return { element, frozenPropertyValues, originalPropertyValues };
+};
+
+const collectHoveredElements = (cursorX: number, cursorY: number): HTMLElement[] => {
+  const hoveredElements: HTMLElement[] = [];
+  let current = getDeepElementAtPoint(cursorX, cursorY);
+  while (current && current !== document.documentElement) {
+    if (isReactGrabElement(current)) break;
+    if (isHtmlElement(current)) {
+      hoveredElements.push(current);
+    }
+    current = getComposedParentElement(current);
+  }
+  return hoveredElements;
+};
+
+const collectFocusedElements = (): HTMLElement[] => {
+  const focusedElements: HTMLElement[] = [];
+  let current: Element | null = document.activeElement;
+  while (current && current !== document.body) {
+    if (isHtmlElement(current)) {
+      focusedElements.push(current);
+    }
+    if (current.shadowRoot?.activeElement) {
+      current = current.shadowRoot.activeElement;
+      continue;
+    }
+    if (isIframeElement(current)) {
+      current = getAccessibleIframeDocument(current)?.activeElement ?? null;
+      continue;
+    }
+    current = null;
+  }
+  return focusedElements;
 };
 
 const applyFrozenStates = (
   states: FrozenPseudoState[],
-  storageMap: Map<HTMLElement, string>,
+  storageMap: Map<HTMLElement, Map<string, InlineStyleProperty>>,
 ): void => {
-  for (const { element, originalCssText, frozenStyles } of states) {
-    storageMap.set(element, originalCssText);
-    element.style.cssText = frozenStyles;
+  for (const { element, frozenPropertyValues, originalPropertyValues } of states) {
+    storageMap.set(element, originalPropertyValues);
+    for (const [property, value] of frozenPropertyValues) {
+      element.style.setProperty(property, value, "important");
+    }
   }
 };
 
 const restoreFrozenStates = (
-  storageMap: Map<HTMLElement, string>,
-  styleProperties: readonly string[],
-): void => {
-  for (const [element, originalCssText] of storageMap) {
-    // HACK: For elements with animation-controlled properties (opacity, transform, etc.),
-    // only remove the style properties we added, don't restore original cssText.
-    // Animation libraries (Framer Motion, etc.) use inline styles that change over time.
-    // Restoring old cssText would reset animation progress and cause visual flash.
-    if (hasAnimationControlledProperty(originalCssText)) {
-      for (const prop of styleProperties) {
-        element.style.removeProperty(prop);
+  storageMap: Map<HTMLElement, Map<string, InlineStyleProperty>>,
+): unknown[] => {
+  const cleanupErrors: unknown[] = [];
+  for (const [element, originalPropertyValues] of storageMap) {
+    for (const [property, originalProperty] of originalPropertyValues) {
+      try {
+        if (originalProperty.value) {
+          element.style.setProperty(property, originalProperty.value, originalProperty.priority);
+        } else {
+          element.style.removeProperty(property);
+        }
+        originalPropertyValues.delete(property);
+      } catch (error) {
+        cleanupErrors.push(error);
       }
-    } else {
-      element.style.cssText = originalCssText;
     }
+    if (originalPropertyValues.size === 0) storageMap.delete(element);
   }
-  storageMap.clear();
+  return cleanupErrors;
 };
 
-export const freezePseudoStates = (): void => {
-  if (pointerEventsStyle) return;
+interface PseudoFreezeSnapshot {
+  hoverStates: FrozenPseudoState[];
+  focusStates: FrozenPseudoState[];
+}
 
-  for (const eventType of MOUSE_EVENTS_TO_BLOCK) {
-    document.addEventListener(eventType, stopEvent, true);
+// READ phase. collectHoveredElements (elementFromPoint) and freezeElement
+// (getComputedStyle) force layout/style flushes, so the caller must run this
+// before any freeze-related DOM writes to avoid a second forced recalc.
+export const collectPseudoStates = (
+  cursorX?: number,
+  cursorY?: number,
+): PseudoFreezeSnapshot | null => {
+  // Demo mode is display-only and must never freeze (or force a style flush
+  // on) the host page. applyPseudoStates bails on the null snapshot.
+  if (IS_DEMO) return null;
+  if (isPointerEventsFreezeInstalled()) return null;
+
+  const hoverStates: FrozenPseudoState[] = [];
+  const isCursorInViewport =
+    cursorX !== undefined &&
+    cursorY !== undefined &&
+    cursorX >= 0 &&
+    cursorY >= 0 &&
+    cursorX < window.innerWidth &&
+    cursorY < window.innerHeight;
+  const hoveredElements = isCursorInViewport
+    ? collectHoveredElements(cursorX, cursorY)
+    : getDeepHoveredElements();
+  for (const element of hoveredElements) {
+    const state = freezeElement(element, HOVER_STYLE_PROPERTIES);
+    if (state) hoverStates.push(state);
   }
 
-  for (const eventType of FOCUS_EVENTS_TO_BLOCK) {
-    document.addEventListener(eventType, preventFocusChange, true);
+  const focusStates: FrozenPseudoState[] = [];
+  for (const element of collectFocusedElements()) {
+    const state = freezeElement(element, FOCUS_STYLE_PROPERTIES, frozenFocusElements);
+    if (state) focusStates.push(state);
   }
 
-  const hoverStates = collectHoverStates();
-  const focusStates = collectFocusStates();
+  return { hoverStates, focusStates };
+};
 
-  applyFrozenStates(hoverStates, frozenHoverElements);
-  applyFrozenStates(focusStates, frozenFocusElements);
+// WRITE phase. Event blockers + inline-style pins + pointer-events stylesheet —
+// no layout reads, so it never forces a recalc on its own.
+export const applyPseudoStates = (snapshot: PseudoFreezeSnapshot | null): void => {
+  if (!snapshot) return;
 
-  pointerEventsStyle = createStyleElement(
-    "data-react-grab-frozen-pseudo",
-    POINTER_EVENTS_STYLES,
-  );
-  enablePointerEventsOverride();
+  isFreezeApplied = true;
+  registeredDocuments.add(document);
+  for (const targetDocument of registeredDocuments) addEventBlockers(targetDocument);
+
+  applyFrozenStates(snapshot.hoverStates, frozenHoverElements);
+  applyFrozenStates(snapshot.focusStates, frozenFocusElements);
+
+  installPointerEventsFreeze();
 };
 
 export const unfreezePseudoStates = (): void => {
-  disablePointerEventsOverride();
   clearElementPositionCache();
 
-  for (const eventType of MOUSE_EVENTS_TO_BLOCK) {
-    document.removeEventListener(eventType, stopEvent, true);
+  isFreezeApplied = false;
+  for (const targetDocument of registeredDocuments) removeEventBlockers(targetDocument);
+
+  const cleanupErrors = [
+    ...restoreFrozenStates(frozenHoverElements),
+    ...restoreFrozenStates(frozenFocusElements),
+  ];
+
+  try {
+    uninstallPointerEventsFreeze();
+  } catch (error) {
+    cleanupErrors.push(error);
   }
-
-  for (const eventType of FOCUS_EVENTS_TO_BLOCK) {
-    document.removeEventListener(eventType, preventFocusChange, true);
-  }
-
-  restoreFrozenStates(frozenHoverElements, HOVER_STYLE_PROPERTIES);
-  restoreFrozenStates(frozenFocusElements, FOCUS_STYLE_PROPERTIES);
-
-  pointerEventsStyle?.remove();
-  pointerEventsStyle = null;
+  throwCollectedErrors(cleanupErrors, "Unfreezing pseudo states failed");
 };
